@@ -123,6 +123,11 @@ textarea{min-height:110px;font-family:ui-monospace,Menlo,monospace;font-size:12p
 .tcol .tp{display:flex;justify-content:space-between;gap:8px;padding:5px 0;font-size:16px}
 .tcol .tp span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .tcol .tp .num{font-size:16px;opacity:.75}
+.btn.sm{padding:6px 10px;font-size:14px;flex:none}
+.btn.sm.on{border-color:var(--neg);color:var(--neg)}
+.rrow.hurt .nm b{text-decoration:line-through;opacity:.7}
+.rrow.hurt .box{opacity:.35}
+.rrow .tog:disabled{cursor:default}
 @media (prefers-reduced-motion:no-preference){.bar div{transition:flex-basis .25s}}
 </style>
 </head>
@@ -132,7 +137,7 @@ textarea{min-height:110px;font-family:ui-monospace,Menlo,monospace;font-size:12p
 const KEY='ultimate-elo:v1';
 const CATS=['overall','3v3','5v5'];
 const CATNAME={overall:'Overall','3v3':'3v3','5v5':'5v5'};
-let S={players:[],games:[],settings:{k:32,start:1000,mov:true},here:{},hereDate:''};
+let S={players:[],games:[],settings:{k:32,start:1000,mov:true},here:{},hereDate:'',injured:{}};
 let UI={tab:'board',cat:'overall',pid:null,pcat:'overall',assign:{},tn:0,tg:0,tm:null,sA:0,sB:0,confirm:null,msg:'',err:false,saved:null,imp:''};
 let P=null;
 
@@ -144,10 +149,11 @@ const catFor=n=>n===3?'3v3':n===5?'5v5':'overall';
 
 /* ---------- storage ---------- */
 // Uses Claude's built-in storage when available, otherwise this browser's own storage (GitHub Pages).
+const isHere=p=>S.here[p.id]&&!S.injured[p.id];
 const today=()=>new Date().toLocaleDateString('en-CA');
 const hasWS=()=>typeof window!=='undefined'&&window.storage&&typeof window.storage.set==='function';
 function normalize(d){
-  const n={players:d.players||[],games:d.games||[],settings:Object.assign({k:32,start:1000,mov:true},d.settings||{}),here:d.here||{},hereDate:d.hereDate||''};
+  const n={players:d.players||[],games:d.games||[],settings:Object.assign({k:32,start:1000,mov:true},d.settings||{}),here:d.here||{},hereDate:d.hereDate||'',injured:d.injured||{}};
   if(n.hereDate!==today()){n.here={};n.hereDate=today();} // attendance resets each day
   return n;
 }
@@ -265,17 +271,23 @@ function rosterAdd(){
   const el=$('rnames'); addNames(el.value); render(); const e=$('rnames'); if(e) e.focus();
 }
 function toggleHere(id){
+  if(S.injured[id]) return;
   if(S.here[id]){delete S.here[id];delete UI.assign[id];} else S.here[id]=true;
   UI.tm=null; save(); render();
 }
-function hereAll(){S.players.forEach(p=>S.here[p.id]=true);UI.tm=null;save();render();}
+function toggleInjured(id){
+  if(S.injured[id]) delete S.injured[id];
+  else {S.injured[id]=true;delete S.here[id];delete UI.assign[id];}
+  UI.tm=null; save(); render();
+}
+function hereAll(){S.players.filter(p=>!S.injured[p.id]).forEach(p=>S.here[p.id]=true);UI.tm=null;save();render();}
 function hereNone(){S.here={};UI.assign={};UI.tm=null;save();render();}
 function pickFmt(n){UI.tn=n;UI.tg=0;UI.tm=null;render();}
 function setTg(g){UI.tg=g;UI.tm=null;render();}
 function remake(){UI.tm=null;render();}
 function makeTeams(){
   const n=UI.tn; UI.tm=null; if(!n) return;
-  const need=2*n, pool=S.players.filter(p=>S.here[p.id]).map(p=>p.id);
+  const need=2*n, pool=S.players.filter(isHere).map(p=>p.id);
   const max=Math.floor(pool.length/need); if(!max) return;
   const ng=UI.tg?Math.min(UI.tg,max):max, c=catFor(n);
   for(let i=pool.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[pool[i],pool[j]]=[pool[j],pool[i]];}
@@ -321,7 +333,7 @@ function delGame(id){
 }
 function delPlayer(id){
   if(UI.confirm!=='p'+id){UI.confirm='p'+id;return render();}
-  S.players=S.players.filter(p=>p.id!==id); delete UI.assign[id]; UI.pid=null; UI.confirm=null; compute(); save(); render();
+  S.players=S.players.filter(p=>p.id!==id); delete UI.assign[id]; delete S.injured[id]; delete S.here[id]; UI.pid=null; UI.confirm=null; compute(); save(); render();
 }
 function renamePlayer(id){
   const v=($('rn').value||'').trim(); if(!v) return;
@@ -342,7 +354,7 @@ function doImport(){
 }
 function resetAll(){
   if(UI.confirm!=='reset'){UI.confirm='reset';return render();}
-  S.players=[];S.games=[];S.here={};UI.assign={};UI.confirm=null;UI.pid=null;compute();save();UI.msg='Everything cleared.';UI.err=false;render();
+  S.players=[];S.games=[];S.here={};S.injured={};UI.assign={};UI.confirm=null;UI.pid=null;compute();save();UI.msg='Everything cleared.';UI.err=false;render();
 }
 
 /* ---------- views ---------- */
@@ -425,22 +437,23 @@ function vRoster(){
   <textarea id="rnames" rows="3" style="min-height:76px;font-family:var(--body);font-size:16px" placeholder="Type a name, or paste a list (one per line or separated by commas)" aria-label="Names to add" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();rosterAdd()}"></textarea>
   <p style="margin:8px 0 0"><button class="btn full" onclick="rosterAdd()">Add to roster</button></p>`;
   if(!S.players.length) return h+`<p class="mute">Your roster is empty. Add names above and they'll be saved for every practice.</p>`;
-  const here=S.players.filter(p=>S.here[p.id]).length;
+  const here=S.players.filter(isHere).length, hurt=S.players.filter(p=>S.injured[p.id]).length;
   h+=`<h3>Who's here today</h3>
-  <div class="seg" style="align-items:center"><span class="mute" style="margin-right:auto"><b>${here}</b> of ${S.players.length} here</span><button onclick="hereAll()">Everyone</button><button onclick="hereNone()">No one</button></div>`;
+  <div class="seg" style="align-items:center"><span class="mute" style="margin-right:auto"><b>${here}</b> of ${S.players.length-hurt} available</span><button onclick="hereAll()">Everyone</button><button onclick="hereNone()">No one</button></div>`;
   const ps=[...S.players].sort((a,b)=>a.name.localeCompare(b.name));
   h+=ps.map(p=>{
-    const on=!!S.here[p.id], n=P.N[p.id].overall;
-    return `<div class="rrow"><button class="tog" role="checkbox" aria-checked="${on}" onclick="toggleHere('${p.id}')"><span class="box ${on?'on':''}">${on?'&#10003;':''}</span><span class="nm"><b>${esc(p.name)}</b><span class="small mute">${n?n+' game'+(n===1?'':'s')+' · '+Math.round(P.R[p.id].overall):'No games yet'}</span></span></button><button class="btn ghost" style="padding:6px 12px;font-size:14px" onclick="openPlayer('${p.id}')">Edit</button></div>`;
+    const hurt=!!S.injured[p.id], on=!hurt&&!!S.here[p.id], n=P.N[p.id].overall;
+    const sub=hurt?'<span class="small neg"><b>Injured</b> · left out of teams</span>':`<span class="small mute">${n?n+' game'+(n===1?'':'s')+' · '+Math.round(P.R[p.id].overall):'No games yet'}</span>`;
+    return `<div class="rrow ${hurt?'hurt':''}"><button class="tog" role="checkbox" aria-checked="${on}" ${hurt?'disabled':''} onclick="toggleHere('${p.id}')"><span class="box ${on?'on':''}">${on?'&#10003;':''}</span><span class="nm"><b>${esc(p.name)}</b>${sub}</span></button><button class="btn ghost sm ${hurt?'on':''}" onclick="toggleInjured('${p.id}')" aria-pressed="${hurt}">${hurt?'Healthy':'Injured'}</button><button class="btn ghost sm" onclick="openPlayer('${p.id}')">Edit</button></div>`;
   }).join('');
-  return h+`<p class="small mute" style="margin-top:12px">Attendance resets each day. Tap Edit to rename or remove someone.</p>`;
+  return h+`<p class="small mute" style="margin-top:12px">Attendance resets each day. Injured stays on until you tap Healthy, so that player is skipped for teams every practice. Tap Edit to rename or remove someone.</p>`;
 }
 
 function vTeams(){
-  const here=S.players.filter(p=>S.here[p.id]).length;
+  const here=S.players.filter(isHere).length;
   let h=`<h2>Make fair teams</h2>`;
   if(!S.players.length) return h+`<p class="mute">Add your players on the <button class="linkbtn" onclick="go('roster')">Roster</button> tab first.</p>`;
-  h+=`<p class="mute" style="margin:0 0 12px"><b>${here}</b> here today. <button class="linkbtn" onclick="go('roster')">Change who's here</button></p>
+  h+=`<p class="mute" style="margin:0 0 12px"><b>${here}</b> here today${S.players.some(p=>S.injured[p.id])?` (${S.players.filter(p=>S.injured[p.id]).length} injured, left out)`:''}. <button class="linkbtn" onclick="go('roster')">Change who's here</button></p>
   <div class="lbl">What are you playing?</div>
   <div class="fmts">${[3,4,5,6,7].map(n=>{const ok=here>=2*n;return `<button class="${UI.tn===n?'on':''}${ok?'':' off'}" onclick="pickFmt(${n})"><span class="num">${n}v${n}</span><span class="small">${ok?'ready':'need '+2*n}</span></button>`;}).join('')}</div>`;
   if(!UI.tn) return h+`<p class="mute">Pick a game size and I'll split everyone who's here into the most even teams I can, using their ratings.</p>`;
@@ -474,7 +487,7 @@ function vLog(){
   const A=side(1),B=side(2);
   let h='';
   if(UI.msg) h+=`<div class="msg ${UI.err?'err':''}" role="status">${esc(UI.msg)}</div>`;
-  const sorted=S.players.filter(p=>S.here[p.id]).sort((a,b)=>a.name.localeCompare(b.name));
+  const sorted=S.players.filter(isHere).sort((a,b)=>a.name.localeCompare(b.name));
   if(!S.players.length) h+=`<p class="mute">No one on the roster yet. <button class="linkbtn" onclick="go('roster')">Add your players</button> first.</p>`;
   else if(!sorted.length) h+=`<p class="mute">No one is marked here today. <button class="linkbtn" onclick="go('roster')">Pick who showed up</button> on the Roster tab.</p>`;
   else h+=`<p class="mute small" style="margin:0 0 4px">Tap a name to cycle: Light, Dark, sitting out. Missing someone? <button class="linkbtn" onclick="go('roster')">Edit who's here</button></p>`;
