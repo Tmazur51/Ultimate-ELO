@@ -91,6 +91,9 @@ td.r,th.r{text-align:right;font-variant-numeric:tabular-nums}
 .game{padding:12px 0;border-bottom:1px solid var(--line)}
 .game .hd{display:flex;justify-content:space-between;align-items:baseline}
 .game .sc{font-family:var(--display);font-size:24px;font-weight:700}
+.game .gb{display:flex;gap:6px}
+.game .hd{gap:8px}
+input.se{width:56px;padding:4px 2px;text-align:center;font-family:var(--display);font-size:24px;font-weight:700;border-radius:8px}
 .game .tm{font-size:14px;margin-top:2px}
 .game .w{font-weight:700}
 .date{font-family:var(--display);font-size:16px;color:var(--mute);margin:16px 0 0;padding-bottom:2px;border-bottom:2px solid var(--line)}
@@ -140,7 +143,7 @@ const KEY='ultimate-elo:v1';
 const CATS=['overall','3v3','5v5'];
 const CATNAME={overall:'Overall','3v3':'3v3','5v5':'5v5'};
 let S={players:[],games:[],settings:{k:32,start:1000,mov:true},out:{},hereDate:'',injured:{}};
-let UI={tab:'board',cat:'overall',pid:null,pcat:'overall',assign:{},tn:0,tg:0,tm:null,sA:0,sB:0,confirm:null,msg:'',err:false,sync:'loading',unlock:false,lockMsg:'',imp:''};
+let UI={tab:'board',cat:'overall',pid:null,pcat:'overall',assign:{},tn:0,tg:0,tm:null,sA:0,sB:0,confirm:null,msg:'',err:false,editG:null,sync:'loading',unlock:false,lockMsg:'',imp:''};
 let P=null;
 
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -308,7 +311,7 @@ function balance(ids){
 }
 
 /* ---------- actions ---------- */
-function go(tab){UI.tab=tab;UI.pid=null;UI.msg='';UI.confirm=null;render();}
+function go(tab){UI.tab=tab;UI.pid=null;UI.msg='';UI.confirm=null;UI.editG=null;render();}
 function setCat(c){UI.cat=c;render();}
 function openPlayer(id){UI.pid=id;UI.pcat=UI.cat;UI.tab='board';render();window.scrollTo(0,0);}
 function setPcat(c){UI.pcat=c;render();}
@@ -397,6 +400,22 @@ function recordGame(){
   compute(); save();
   UI.msg=`${A.length}v${A.length} recorded: ${UI.sA}-${UI.sB}.`; UI.err=false; UI.sA=0;UI.sB=0;
   render();
+}
+function editGame(id){
+  if(!canEdit()) return;
+  UI.editG=id; UI.confirm=null; render();
+}
+function cancelEdit(){UI.editG=null;render();}
+function saveGame(id){
+  if(!canEdit()) return;
+  const g=S.games.find(g=>g.id===id); if(!g){UI.editG=null;return render();}
+  const a=parseInt($('eA').value,10), b=parseInt($('eB').value,10);
+  if(isNaN(a)||isNaN(b)||a<0||b<0||(a===0&&b===0)){UI.msg='Enter both scores as whole numbers.';UI.err=true;return render();}
+  const changed=g.sA!==a||g.sB!==b;
+  g.sA=a; g.sB=b; UI.editG=null;
+  if(changed){ compute(); save(); UI.msg=`Score changed to ${a}-${b}. Every rating was recalculated.`; }
+  else UI.msg='No change.';
+  UI.err=false; render();
 }
 function delGame(id){
   if(!canEdit()) return;
@@ -596,12 +615,15 @@ function vGames(){
     if(d!==last){h+=`<div class="date">${d}</div>`;last=d;}
     const n=g.A.length, c=catFor(n), aw=g.sA>g.sB, bw=g.sB>g.sA, D=P.D[g.id]||{};
     const names=(ids,win)=>ids.map(i=>{const dl=D[i]&&D[i].overall; return `${esc(pname(i))}${dl!=null?` <span class="delta ${dl>=0?'pos':'neg'}">${dl>=0?'+':''}${dl.toFixed(0)}</span>`:''}`;}).join(', ');
-    h+=`<div class="game"><div class="hd"><span class="small mute">${n}v${n}</span><span class="sc">${g.sA} &ndash; ${g.sB}</span>
-      <button class="btn ghost ${UI.confirm==='g'+g.id?'warn':''}" style="padding:4px 10px;font-size:13px" onclick="delGame('${g.id}')">${UI.confirm==='g'+g.id?'Tap again':'Delete'}</button></div>
+    const ed=UI.editG===g.id;
+    const score=ed?`<span class="sc"><input id="eA" class="se" type="number" inputmode="numeric" min="0" value="${g.sA}" aria-label="Light score"> &ndash; <input id="eB" class="se" type="number" inputmode="numeric" min="0" value="${g.sB}" aria-label="Dark score"></span>`:`<span class="sc">${g.sA} &ndash; ${g.sB}</span>`;
+    const btns=ed?`<span class="gb"><button class="btn sm" onclick="saveGame('${g.id}')">Save</button><button class="btn ghost sm" onclick="cancelEdit()">Cancel</button></span>`
+      :`<span class="gb"><button class="btn ghost sm" onclick="editGame('${g.id}')">Edit</button><button class="btn ghost sm ${UI.confirm==='g'+g.id?'warn':''}" onclick="delGame('${g.id}')">${UI.confirm==='g'+g.id?'Tap again':'Delete'}</button></span>`;
+    h+=`<div class="game"><div class="hd"><span class="small mute">${n}v${n}</span>${score}${btns}</div>
       <div class="tm ${aw?'w':''}"><span class="sw lt"></span>${names(g.A)}</div>
-      <div class="tm ${bw?'w':''}"><span class="sw dk"></span>${names(g.B)}</div></div>`;
+      <div class="tm ${bw?'w':''}"><span class="sw dk"></span>${names(g.B)}</div>${ed?'<div class="small mute" style="margin-top:6px">Light first, Dark second. Saving recalculates every rating.</div>':''}</div>`;
   }
-  return h+`<p class="small mute">Deleting a game replays every rating from scratch, so the numbers stay consistent.</p>`;
+  return h+`<p class="small mute">Editing or deleting a game replays every rating from scratch, so the numbers stay consistent.</p>`;
 }
 
 function vData(){
