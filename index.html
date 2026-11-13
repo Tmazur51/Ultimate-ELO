@@ -35,7 +35,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px soli
 .top{display:flex;align-items:baseline;justify-content:space-between;padding:6px 0 10px}
 .saved{font-size:12px;color:var(--mute)}
 .tabs{display:flex;gap:4px;border-bottom:2px solid var(--line);margin-bottom:14px;position:sticky;top:0;background:var(--bg);z-index:5}
-.tabs button{flex:1;background:none;border:none;padding:10px 4px;font-family:var(--display);font-size:18px;font-weight:700;color:var(--mute);border-bottom:4px solid transparent;margin-bottom:-2px}
+.tabs button{flex:1;background:none;border:none;padding:10px 2px;font-family:var(--display);font-size:17px;font-weight:700;color:var(--mute);border-bottom:4px solid transparent;margin-bottom:-2px}
 .tabs button.on{color:var(--ink);border-bottom-color:var(--accent)}
 .seg{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
 .seg button{border:1.5px solid var(--line);background:var(--surface);border-radius:999px;padding:6px 14px;font-weight:600}
@@ -102,6 +102,12 @@ svg.chart{width:100%;height:auto;display:block}
 label.chk{display:flex;gap:10px;align-items:flex-start;font-size:15px;margin:8px 0}
 label.chk input{width:20px;height:20px;margin-top:2px;accent-color:var(--accent)}
 textarea{min-height:110px;font-family:ui-monospace,Menlo,monospace;font-size:12px}
+.rrow{display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line)}
+.rrow .tog{flex:1;min-width:0;display:flex;align-items:center;gap:12px;background:none;border:none;text-align:left;padding:10px 4px}
+.rrow .nm{min-width:0}.rrow .nm b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:17px}
+.box{width:28px;height:28px;flex:none;border:2px solid var(--mute);border-radius:7px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:18px}
+.box.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.linkbtn{background:none;border:none;padding:0;color:var(--accent);font-weight:700;text-decoration:underline;font-size:inherit}
 @media (prefers-reduced-motion:no-preference){.bar div{transition:flex-basis .25s}}
 </style>
 </head>
@@ -111,7 +117,7 @@ textarea{min-height:110px;font-family:ui-monospace,Menlo,monospace;font-size:12p
 const KEY='ultimate-elo:v1';
 const CATS=['overall','3v3','5v5'];
 const CATNAME={overall:'Overall','3v3':'3v3','5v5':'5v5'};
-let S={players:[],games:[],settings:{k:32,start:1000,mov:true}};
+let S={players:[],games:[],settings:{k:32,start:1000,mov:true},here:{},hereDate:''};
 let UI={tab:'board',cat:'overall',pid:null,pcat:'overall',assign:{},sA:0,sB:0,confirm:null,msg:'',err:false,saved:null,imp:''};
 let P=null;
 
@@ -122,15 +128,27 @@ const pname=id=>{const p=S.players.find(p=>p.id===id);return p?p.name:'(removed)
 const catFor=n=>n===3?'3v3':n===5?'5v5':'overall';
 
 /* ---------- storage ---------- */
+// Uses Claude's built-in storage when available, otherwise this browser's own storage (GitHub Pages).
+const today=()=>new Date().toLocaleDateString('en-CA');
+const hasWS=()=>typeof window!=='undefined'&&window.storage&&typeof window.storage.set==='function';
+function normalize(d){
+  const n={players:d.players||[],games:d.games||[],settings:Object.assign({k:32,start:1000,mov:true},d.settings||{}),here:d.here||{},hereDate:d.hereDate||''};
+  if(n.hereDate!==today()){n.here={};n.hereDate=today();} // attendance resets each day
+  return n;
+}
 async function save(){
-  try{ await window.storage.set(KEY,JSON.stringify(S)); UI.saved=true; }
+  S.hereDate=today();
+  const txt=JSON.stringify(S);
+  try{ if(hasWS()) await window.storage.set(KEY,txt); else window.localStorage.setItem(KEY,txt); UI.saved=true; }
   catch(e){ UI.saved=false; }
   const el=$('saved'); if(el) el.textContent=savedText();
 }
 async function load(){
   try{
-    const r=await window.storage.get(KEY);
-    if(r&&r.value){ const d=JSON.parse(r.value); S={players:d.players||[],games:d.games||[],settings:Object.assign({k:32,start:1000,mov:true},d.settings||{})}; UI.saved=true; }
+    let txt=null;
+    if(hasWS()){ const r=await window.storage.get(KEY); txt=r&&r.value; }
+    else txt=window.localStorage.getItem(KEY);
+    if(txt){ S=normalize(JSON.parse(txt)); UI.saved=true; }
   }catch(e){ /* nothing saved yet */ }
 }
 const savedText=()=>UI.saved===false?'Not saving here. Use Data > Export to keep a copy.':UI.saved?'Saved':'';
@@ -210,13 +228,33 @@ function cyc(id){UI.assign[id]=((UI.assign[id]||0)+1)%3;render();}
 function clearTeams(){UI.assign={};UI.msg='';render();}
 function side(n){return S.players.filter(p=>UI.assign[p.id]===n).map(p=>p.id);}
 function step(w,d){const k=w==='A'?'sA':'sB';UI['s'+w]=Math.max(0,(+UI[k]||0)+d);render();}
-function addPlayer(){
-  const el=$('np'); const name=(el.value||'').trim();
-  if(!name){return;}
-  if(S.players.some(p=>p.name.toLowerCase()===name.toLowerCase())){UI.msg=name+' is already on the roster.';UI.err=true;render();return;}
-  const p={id:uid(),name}; S.players.push(p); UI.assign[p.id]=0; UI.msg=''; UI.err=false;
-  compute(); save(); render(); const e=$('np'); if(e) e.focus();
+function addNames(raw){
+  const names=String(raw||'').split(/[\n,;]+/).map(x=>x.trim()).filter(Boolean);
+  const added=[],skipped=[];
+  for(const name of names){
+    if(S.players.some(p=>p.name.toLowerCase()===name.toLowerCase())){skipped.push(name);continue;}
+    const p={id:uid(),name}; S.players.push(p); S.here[p.id]=true; added.push(name);
+  }
+  S.hereDate=today();
+  if(added.length){compute();save();}
+  let msg='';
+  if(added.length) msg=`Added ${added.length} player${added.length===1?'':'s'} and marked here today.`;
+  if(skipped.length) msg+=(msg?' ':'')+`Already on the roster: ${skipped.join(', ')}.`;
+  if(!msg) msg='Type a name first.';
+  UI.msg=msg; UI.err=!added.length;
 }
+function addPlayer(){ // quick add from the Log game tab
+  const el=$('np'); addNames(el.value); render(); const e=$('np'); if(e) e.focus();
+}
+function rosterAdd(){
+  const el=$('rnames'); addNames(el.value); render(); const e=$('rnames'); if(e) e.focus();
+}
+function toggleHere(id){
+  if(S.here[id]){delete S.here[id];delete UI.assign[id];} else S.here[id]=true;
+  save(); render();
+}
+function hereAll(){S.players.forEach(p=>S.here[p.id]=true);save();render();}
+function hereNone(){S.here={};UI.assign={};save();render();}
 function autoBalance(){
   const ids=[...side(1),...side(2)];
   const r=balance(ids);
@@ -256,14 +294,14 @@ function doImport(){
   try{
     const d=JSON.parse($('imp').value);
     if(!Array.isArray(d.players)||!Array.isArray(d.games)) throw 0;
-    S={players:d.players,games:d.games,settings:Object.assign({k:32,start:1000,mov:true},d.settings||{})};
+    S=normalize(d);
     UI.assign={}; UI.msg='Data imported.'; UI.err=false; compute(); save();
   }catch(e){UI.msg='That text is not valid exported data.';UI.err=true;}
   render();
 }
 function resetAll(){
   if(UI.confirm!=='reset'){UI.confirm='reset';return render();}
-  S.players=[];S.games=[];UI.assign={};UI.confirm=null;UI.pid=null;compute();save();UI.msg='Everything cleared.';UI.err=false;render();
+  S.players=[];S.games=[];S.here={};UI.assign={};UI.confirm=null;UI.pid=null;compute();save();UI.msg='Everything cleared.';UI.err=false;render();
 }
 
 /* ---------- views ---------- */
@@ -338,18 +376,38 @@ function vPlayer(){
       :`<button class="btn ghost ${UI.confirm==='p'+id?'warn':''}" onclick="delPlayer('${id}')">${UI.confirm==='p'+id?'Tap again to delete':'Remove from roster'}</button>`}</p>`;
 }
 
+function vRoster(){
+  let h='';
+  if(UI.msg) h+=`<div class="msg ${UI.err?'err':''}" role="status">${esc(UI.msg)}</div>`;
+  h+=`<h2>Roster</h2>
+  <div class="lbl">Add players</div>
+  <textarea id="rnames" rows="3" style="min-height:76px;font-family:var(--body);font-size:16px" placeholder="Type a name, or paste a list (one per line or separated by commas)" aria-label="Names to add" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();rosterAdd()}"></textarea>
+  <p style="margin:8px 0 0"><button class="btn full" onclick="rosterAdd()">Add to roster</button></p>`;
+  if(!S.players.length) return h+`<p class="mute">Your roster is empty. Add names above and they'll be saved for every practice.</p>`;
+  const here=S.players.filter(p=>S.here[p.id]).length;
+  h+=`<h3>Who's here today</h3>
+  <div class="seg" style="align-items:center"><span class="mute" style="margin-right:auto"><b>${here}</b> of ${S.players.length} here</span><button onclick="hereAll()">Everyone</button><button onclick="hereNone()">No one</button></div>`;
+  const ps=[...S.players].sort((a,b)=>a.name.localeCompare(b.name));
+  h+=ps.map(p=>{
+    const on=!!S.here[p.id], n=P.N[p.id].overall;
+    return `<div class="rrow"><button class="tog" role="checkbox" aria-checked="${on}" onclick="toggleHere('${p.id}')"><span class="box ${on?'on':''}">${on?'&#10003;':''}</span><span class="nm"><b>${esc(p.name)}</b><span class="small mute">${n?n+' game'+(n===1?'':'s')+' · '+Math.round(P.R[p.id].overall):'No games yet'}</span></span></button><button class="btn ghost" style="padding:6px 12px;font-size:14px" onclick="openPlayer('${p.id}')">Edit</button></div>`;
+  }).join('');
+  return h+`<p class="small mute" style="margin-top:12px">Attendance resets each day. Tap Edit to rename or remove someone.</p>`;
+}
+
 function vLog(){
   const A=side(1),B=side(2);
   let h='';
   if(UI.msg) h+=`<div class="msg ${UI.err?'err':''}" role="status">${esc(UI.msg)}</div>`;
-  if(!S.players.length) h+=`<p class="mute">Add everyone who's at practice. They stay on the roster for next time.</p>`;
-  else h+=`<p class="mute small" style="margin:0 0 4px">Tap a name to cycle: Light, Dark, sitting out.</p>`;
-  const sorted=[...S.players].sort((a,b)=>a.name.localeCompare(b.name));
+  const sorted=S.players.filter(p=>S.here[p.id]).sort((a,b)=>a.name.localeCompare(b.name));
+  if(!S.players.length) h+=`<p class="mute">No one on the roster yet. <button class="linkbtn" onclick="go('roster')">Add your players</button> first.</p>`;
+  else if(!sorted.length) h+=`<p class="mute">No one is marked here today. <button class="linkbtn" onclick="go('roster')">Pick who showed up</button> on the Roster tab.</p>`;
+  else h+=`<p class="mute small" style="margin:0 0 4px">Tap a name to cycle: Light, Dark, sitting out. Missing someone? <button class="linkbtn" onclick="go('roster')">Edit who's here</button></p>`;
   h+=`<div class="chips">${sorted.map(p=>{
     const a=UI.assign[p.id]||0, cls=a===1?'lt':a===2?'dk':'';
     return `<button class="chip ${cls}" onclick="cyc('${p.id}')" aria-label="${esc(p.name)}: ${['sitting out','Light','Dark'][a]}"><b>${esc(p.name)}</b><span>${Math.round(P.R[p.id].overall)}${a?' · '+(a===1?'Light':'Dark'):''}</span></button>`;
   }).join('')}</div>`;
-  h+=`<div class="add"><input type="text" id="np" placeholder="Add a player" aria-label="New player name" onkeydown="if(event.key==='Enter')addPlayer()"><button class="btn ghost" onclick="addPlayer()">Add</button></div>`;
+  h+=`<div class="add"><input type="text" id="np" placeholder="Add someone who just showed up" aria-label="New player name" onkeydown="if(event.key==='Enter')addPlayer()"><button class="btn ghost" onclick="addPlayer()">Add</button></div>`;
   h+=`<div class="seg" style="margin-top:14px"><button onclick="autoBalance()">Balance teams</button><button onclick="clearTeams()">Clear teams</button></div>`;
   h+=`<div class="sides"><span><span class="sw lt"></span>Light ${A.length}</span><span><span class="sw dk"></span>Dark ${B.length}</span></div>`;
   if(A.length&&B.length&&A.length!==B.length) h+=`<p class="warnline">Uneven teams: ${A.length} vs ${B.length}. Move someone so both sides match.</p>`;
@@ -409,8 +467,8 @@ function vData(){
 
 function render(){
   const scrollY=window.scrollY;
-  const tabs=[['board','Ratings'],['log','Log game'],['games','Games'],['data','Data']];
-  let body = UI.tab==='board' ? (UI.pid?vPlayer():vBoard()) : UI.tab==='log' ? vLog() : UI.tab==='games' ? vGames() : vData();
+  const tabs=[['board','Ratings'],['roster','Roster'],['log','Log game'],['games','Games'],['data','Data']];
+  let body = UI.tab==='board' ? (UI.pid?vPlayer():vBoard()) : UI.tab==='roster' ? vRoster() : UI.tab==='log' ? vLog() : UI.tab==='games' ? vGames() : vData();
   $('app').innerHTML=`<div class="top"><h1>Practice Elo</h1><span class="saved" id="saved">${savedText()}</span></div>
     <nav class="tabs">${tabs.map(([k,l])=>`<button class="${UI.tab===k?'on':''}" onclick="go('${k}')">${l}</button>`).join('')}</nav>${body}`;
   window.scrollTo(0,scrollY);
