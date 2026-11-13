@@ -34,6 +34,7 @@ button{font:inherit;color:inherit;cursor:pointer}
 button:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
 .top{display:flex;align-items:baseline;justify-content:space-between;padding:6px 0 10px}
 .saved{font-size:12px;color:var(--mute)}
+.top .right{display:flex;align-items:center;gap:8px}
 .tabs{display:flex;gap:4px;border-bottom:2px solid var(--line);margin-bottom:14px;position:sticky;top:0;background:var(--bg);z-index:5}
 .tabs button{flex:1;background:none;border:none;padding:10px 1px;font-family:var(--display);font-size:16px;font-weight:700;color:var(--mute);border-bottom:4px solid transparent;margin-bottom:-2px}
 .tabs button.on{color:var(--ink);border-bottom-color:var(--accent)}
@@ -107,6 +108,7 @@ textarea{min-height:110px;font-family:ui-monospace,Menlo,monospace;font-size:12p
 .rrow .nm{min-width:0}.rrow .nm b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:17px}
 .box{width:28px;height:28px;flex:none;border:2px solid var(--mute);border-radius:7px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:18px}
 .box.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.box.out{background:var(--neg);border-color:var(--neg);color:#fff}
 .linkbtn{background:none;border:none;padding:0;color:var(--accent);font-weight:700;text-decoration:underline;font-size:inherit}
 .fmts{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin:4px 0 8px}
 .fmts button{background:var(--surface);border:1.5px solid var(--line);border-radius:10px;padding:10px 2px;display:flex;flex-direction:column;align-items:center;gap:2px}
@@ -137,8 +139,8 @@ textarea{min-height:110px;font-family:ui-monospace,Menlo,monospace;font-size:12p
 const KEY='ultimate-elo:v1';
 const CATS=['overall','3v3','5v5'];
 const CATNAME={overall:'Overall','3v3':'3v3','5v5':'5v5'};
-let S={players:[],games:[],settings:{k:32,start:1000,mov:true},here:{},hereDate:'',injured:{}};
-let UI={tab:'board',cat:'overall',pid:null,pcat:'overall',assign:{},tn:0,tg:0,tm:null,sA:0,sB:0,confirm:null,msg:'',err:false,saved:null,imp:''};
+let S={players:[],games:[],settings:{k:32,start:1000,mov:true},out:{},hereDate:'',injured:{}};
+let UI={tab:'board',cat:'overall',pid:null,pcat:'overall',assign:{},tn:0,tg:0,tm:null,sA:0,sB:0,confirm:null,msg:'',err:false,sync:'loading',unlock:false,lockMsg:'',imp:''};
 let P=null;
 
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -147,32 +149,97 @@ const $=id=>document.getElementById(id);
 const pname=id=>{const p=S.players.find(p=>p.id===id);return p?p.name:'(removed)'};
 const catFor=n=>n===3?'3v3':n===5?'5v5':'overall';
 
-/* ---------- storage ---------- */
-// Uses Claude's built-in storage when available, otherwise this browser's own storage (GitHub Pages).
-const isHere=p=>S.here[p.id]&&!S.injured[p.id];
+/* ---------- shared storage (Supabase) ---------- */
+const SB_URL='https://ggesapuymmsdwrdphcgf.supabase.co';
+const SB_KEY='sb_publishable_LaDLspYK52C-MaruN7dttA_OEwwkDeR'; // publishable key: safe to be public
+const PASS_KEY='ulti-elo-pass', CACHE_KEY='ulti-elo-cache', OLD_KEY='ultimate-elo:v1';
+let V=0, PASS=null, loaded=false, saving=false, dirty=false;
 const today=()=>new Date().toLocaleDateString('en-CA');
-const hasWS=()=>typeof window!=='undefined'&&window.storage&&typeof window.storage.set==='function';
+const isHere=p=>!S.out[p.id]&&!S.injured[p.id];
 function normalize(d){
-  const n={players:d.players||[],games:d.games||[],settings:Object.assign({k:32,start:1000,mov:true},d.settings||{}),here:d.here||{},hereDate:d.hereDate||'',injured:d.injured||{}};
-  if(n.hereDate!==today()){n.here={};n.hereDate=today();} // attendance resets each day
+  d=d||{};
+  const n={players:d.players||[],games:d.games||[],settings:Object.assign({k:32,start:1000,mov:true},d.settings||{}),out:d.out||{},hereDate:d.hereDate||'',injured:d.injured||{}};
+  if(n.hereDate!==today()){n.out={};n.hereDate=today();} // "out today" resets each day
   return n;
 }
-async function save(){
-  S.hereDate=today();
-  const txt=JSON.stringify(S);
-  try{ if(hasWS()) await window.storage.set(KEY,txt); else window.localStorage.setItem(KEY,txt); UI.saved=true; }
-  catch(e){ UI.saved=false; }
-  const el=$('saved'); if(el) el.textContent=savedText();
+async function rpc(name,body){
+  const r=await fetch(SB_URL+'/rest/v1/rpc/'+name,{method:'POST',headers:{'Content-Type':'application/json',apikey:SB_KEY},body:JSON.stringify(body||{})});
+  if(!r.ok){const e=new Error('HTTP '+r.status);e.status=r.status;throw e;}
+  return r.json();
 }
-async function load(){
+function lsGet(k){try{return window.localStorage.getItem(k);}catch(e){return null;}}
+function lsSet(k,v){try{window.localStorage.setItem(k,v);}catch(e){}}
+function lsDel(k){try{window.localStorage.removeItem(k);}catch(e){}}
+function setSync(v){UI.sync=v;const el=$('saved'); if(el) el.textContent=savedText();}
+const savedText=()=>({loading:'Loading…',saving:'Saving…',offline:'Offline',setup:'Setup needed'}[UI.sync]||(PASS?'Synced · can edit':'View only'));
+async function pull(){
+  const r=await rpc('ulti_get');
+  if(!r||typeof r.version!=='number') throw new Error('bad response');
+  V=r.version; S=normalize(r.data); lsSet(CACHE_KEY,JSON.stringify(r));
+}
+function save(){ if(!PASS) return; dirty=true; if(!saving) flush(); }
+async function flush(){
+  saving=true; setSync('saving');
+  while(dirty){
+    dirty=false; S.hereDate=today();
+    try{
+      const r=await rpc('ulti_save',{p_pass:PASS,p_data:S,p_version:V});
+      if(r.ok){ V=r.version; lsSet(CACHE_KEY,JSON.stringify({data:S,version:V})); setSync('ok'); }
+      else if(r.error==='bad_passcode'){
+        PASS=null; lsDel(PASS_KEY); await pull().catch(()=>{}); compute();
+        UI.unlock=true; UI.lockMsg='The passcode was not accepted, so that change was not saved.'; setSync('ok'); render();
+      }else if(r.error==='conflict'){
+        await pull(); compute(); setSync('ok');
+        UI.msg='Someone else just updated the data, so your last change was not saved. The latest is loaded. Please redo it.'; UI.err=true; render();
+      }
+    }catch(e){
+      setSync('offline'); UI.msg='Could not reach the server, so that change was not saved.'; UI.err=true;
+      await pull().then(()=>{compute();setSync('ok');}).catch(()=>{}); render();
+    }
+  }
+  saving=false;
+}
+function canEdit(){
+  if(!loaded){UI.msg='Still connecting to the team database. Try again in a moment.';UI.err=true;render();return false;}
+  if(PASS) return true;
+  UI.unlock=true; UI.lockMsg=''; render(); return false;
+}
+async function tryUnlock(){
+  const v=($('pw').value||'').trim(); if(!v) return;
   try{
-    let txt=null;
-    if(hasWS()){ const r=await window.storage.get(KEY); txt=r&&r.value; }
-    else txt=window.localStorage.getItem(KEY);
-    if(txt){ S=normalize(JSON.parse(txt)); UI.saved=true; }
-  }catch(e){ /* nothing saved yet */ }
+    // a save with a wrong passcode is refused, a conflict means the passcode was right
+    const r=await rpc('ulti_save',{p_pass:v,p_data:S,p_version:V});
+    if(!r.ok&&r.error==='bad_passcode'){UI.lockMsg='That passcode is not right. It is case-sensitive.';render();return;}
+    if(r.ok) V=r.version; else { await pull(); compute(); }
+    PASS=v; lsSet(PASS_KEY,v); UI.unlock=false; UI.lockMsg=''; UI.msg='Unlocked. This phone can make changes now.'; UI.err=false; setSync('ok'); render();
+  }catch(e){UI.lockMsg='Could not reach the server. Check your connection.';render();}
 }
-const savedText=()=>UI.saved===false?'Not saving here. Use Data > Export to keep a copy.':UI.saved?'Saved':'';
+function forgetPass(){PASS=null;lsDel(PASS_KEY);UI.unlock=false;UI.msg='This phone is now view-only.';UI.err=false;setSync('ok');render();}
+async function poll(){
+  if(saving||!loaded) return;
+  const ae=document.activeElement;
+  if(ae&&(ae.tagName==='INPUT'||ae.tagName==='TEXTAREA')) return; // don't wipe what someone is typing
+  try{
+    const r=await rpc('ulti_get');
+    if(r.version!==V){ V=r.version; S=normalize(r.data); lsSet(CACHE_KEY,JSON.stringify(r)); compute(); render(); }
+    if(UI.sync==='offline') setSync('ok');
+  }catch(e){ setSync('offline'); }
+}
+function oldData(){
+  try{const t=lsGet(OLD_KEY); if(!t) return null; const d=JSON.parse(t); return d.players&&d.players.length?d:null;}catch(e){return null;}
+}
+function importOld(){
+  if(!canEdit()) return;
+  if(UI.confirm!=='old'){UI.confirm='old';return render();}
+  S=normalize(oldData()); UI.confirm=null; compute(); save(); UI.msg='Copied this phone\'s old ratings into the team database.'; UI.err=false; render();
+}
+function accessHtml(){
+  const old=oldData();
+  return `<h3>Team access</h3>
+  <p class="small">${PASS?'This phone can log games and edit the roster.':'This phone is view-only. Everyone sees the same live ratings, roster and games.'}</p>
+  <p>${PASS?`<button class="btn ghost" onclick="forgetPass()">Lock this phone</button>`:`<button class="btn ghost" onclick="UI.unlock=true;UI.lockMsg='';render()">Unlock to edit</button>`}</p>
+  ${old?`<p class="small mute">This phone still has ratings saved from the earlier single-phone version (${old.players.length} players, ${(old.games||[]).length} games).</p><p><button class="btn ghost ${UI.confirm==='old'?'warn':''}" onclick="importOld()">${UI.confirm==='old'?'Tap again to replace the team data':'Copy them into the team database'}</button></p>`:''}`;
+}
 
 /* ---------- Elo engine (everything is recomputed from the game list) ---------- */
 function compute(){
@@ -254,34 +321,37 @@ function addNames(raw){
   const added=[],skipped=[];
   for(const name of names){
     if(S.players.some(p=>p.name.toLowerCase()===name.toLowerCase())){skipped.push(name);continue;}
-    const p={id:uid(),name}; S.players.push(p); S.here[p.id]=true; added.push(name);
+    const p={id:uid(),name}; S.players.push(p); added.push(name);
   }
   S.hereDate=today();
   if(added.length){UI.tm=null;compute();save();}
   let msg='';
-  if(added.length) msg=`Added ${added.length} player${added.length===1?'':'s'} and marked here today.`;
+  if(added.length) msg=`Added ${added.length} player${added.length===1?'':'s'} to the team.`;
   if(skipped.length) msg+=(msg?' ':'')+`Already on the roster: ${skipped.join(', ')}.`;
   if(!msg) msg='Type a name first.';
   UI.msg=msg; UI.err=!added.length;
 }
-function addPlayer(){ // quick add from the Log game tab
+function addPlayer(){
+  if(!canEdit()) return; // quick add from the Log game tab
   const el=$('np'); addNames(el.value); render(); const e=$('np'); if(e) e.focus();
 }
 function rosterAdd(){
+  if(!canEdit()) return;
   const el=$('rnames'); addNames(el.value); render(); const e=$('rnames'); if(e) e.focus();
 }
-function toggleHere(id){
+function toggleOut(id){
+  if(!canEdit()) return;
   if(S.injured[id]) return;
-  if(S.here[id]){delete S.here[id];delete UI.assign[id];} else S.here[id]=true;
+  if(S.out[id]) delete S.out[id]; else {S.out[id]=true;delete UI.assign[id];}
   UI.tm=null; save(); render();
 }
 function toggleInjured(id){
+  if(!canEdit()) return;
   if(S.injured[id]) delete S.injured[id];
-  else {S.injured[id]=true;delete S.here[id];delete UI.assign[id];}
+  else {S.injured[id]=true;delete S.out[id];delete UI.assign[id];}
   UI.tm=null; save(); render();
 }
-function hereAll(){S.players.filter(p=>!S.injured[p.id]).forEach(p=>S.here[p.id]=true);UI.tm=null;save();render();}
-function hereNone(){S.here={};UI.assign={};UI.tm=null;save();render();}
+function allIn(){if(!canEdit())return;S.out={};UI.tm=null;save();render();}
 function pickFmt(n){UI.tn=n;UI.tg=0;UI.tm=null;render();}
 function setTg(g){UI.tg=g;UI.tm=null;render();}
 function remake(){UI.tm=null;render();}
@@ -317,6 +387,7 @@ function autoBalance(){
   render();
 }
 function recordGame(){
+  if(!canEdit()) return;
   const A=side(1),B=side(2);
   const sA=parseInt($('sA').value,10), sB=parseInt($('sB').value,10);
   UI.sA=isNaN(sA)?0:sA; UI.sB=isNaN(sB)?0:sB;
@@ -328,22 +399,27 @@ function recordGame(){
   render();
 }
 function delGame(id){
+  if(!canEdit()) return;
   if(UI.confirm!=='g'+id){UI.confirm='g'+id;return render();}
   S.games=S.games.filter(g=>g.id!==id); UI.confirm=null; compute(); save(); render();
 }
 function delPlayer(id){
+  if(!canEdit()) return;
   if(UI.confirm!=='p'+id){UI.confirm='p'+id;return render();}
-  S.players=S.players.filter(p=>p.id!==id); delete UI.assign[id]; delete S.injured[id]; delete S.here[id]; UI.pid=null; UI.confirm=null; compute(); save(); render();
+  S.players=S.players.filter(p=>p.id!==id); delete UI.assign[id]; delete S.injured[id]; delete S.out[id]; UI.pid=null; UI.confirm=null; compute(); save(); render();
 }
 function renamePlayer(id){
+  if(!canEdit()) return;
   const v=($('rn').value||'').trim(); if(!v) return;
   const p=S.players.find(p=>p.id===id); p.name=v; save(); render();
 }
 function setSetting(key,val){
+  if(!canEdit()) return;
   if(key==='mov') S.settings.mov=!!val; else { const n=parseFloat(val); if(!isNaN(n)&&n>0) S.settings[key]=n; }
   compute(); save(); render();
 }
 function doImport(){
+  if(!canEdit()) return;
   try{
     const d=JSON.parse($('imp').value);
     if(!Array.isArray(d.players)||!Array.isArray(d.games)) throw 0;
@@ -353,8 +429,9 @@ function doImport(){
   render();
 }
 function resetAll(){
+  if(!canEdit()) return;
   if(UI.confirm!=='reset'){UI.confirm='reset';return render();}
-  S.players=[];S.games=[];S.here={};S.injured={};UI.assign={};UI.confirm=null;UI.pid=null;compute();save();UI.msg='Everything cleared.';UI.err=false;render();
+  S.players=[];S.games=[];S.out={};S.injured={};UI.assign={};UI.confirm=null;UI.pid=null;compute();save();UI.msg='Everything cleared.';UI.err=false;render();
 }
 
 /* ---------- views ---------- */
@@ -431,37 +508,36 @@ function vPlayer(){
 
 function vRoster(){
   let h='';
-  if(UI.msg) h+=`<div class="msg ${UI.err?'err':''}" role="status">${esc(UI.msg)}</div>`;
   h+=`<h2>Roster</h2>
   <div class="lbl">Add players</div>
   <textarea id="rnames" rows="3" style="min-height:76px;font-family:var(--body);font-size:16px" placeholder="Type a name, or paste a list (one per line or separated by commas)" aria-label="Names to add" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();rosterAdd()}"></textarea>
   <p style="margin:8px 0 0"><button class="btn full" onclick="rosterAdd()">Add to roster</button></p>`;
-  if(!S.players.length) return h+`<p class="mute">Your roster is empty. Add names above and they'll be saved for every practice.</p>`;
-  const here=S.players.filter(isHere).length, hurt=S.players.filter(p=>S.injured[p.id]).length;
-  h+=`<h3>Who's here today</h3>
-  <div class="seg" style="align-items:center"><span class="mute" style="margin-right:auto"><b>${here}</b> of ${S.players.length-hurt} available</span><button onclick="hereAll()">Everyone</button><button onclick="hereNone()">No one</button></div>`;
+  if(!S.players.length) return h+`<p class="mute">Your roster is empty. Add your whole team above. They're all counted in each practice unless you mark them out.</p>`;
+  const here=S.players.filter(isHere).length, hurt=S.players.filter(p=>S.injured[p.id]).length, outN=S.players.filter(p=>S.out[p.id]&&!S.injured[p.id]).length;
+  h+=`<h3>Who's out today?</h3>
+  <div class="seg" style="align-items:center"><span class="mute" style="margin-right:auto"><b>${here}</b> playing${outN?` · ${outN} out`:''}${hurt?` · ${hurt} injured`:''}</span><button onclick="allIn()">Everyone's in</button></div>`;
   const ps=[...S.players].sort((a,b)=>a.name.localeCompare(b.name));
   h+=ps.map(p=>{
-    const hurt=!!S.injured[p.id], on=!hurt&&!!S.here[p.id], n=P.N[p.id].overall;
-    const sub=hurt?'<span class="small neg"><b>Injured</b> · left out of teams</span>':`<span class="small mute">${n?n+' game'+(n===1?'':'s')+' · '+Math.round(P.R[p.id].overall):'No games yet'}</span>`;
-    return `<div class="rrow ${hurt?'hurt':''}"><button class="tog" role="checkbox" aria-checked="${on}" ${hurt?'disabled':''} onclick="toggleHere('${p.id}')"><span class="box ${on?'on':''}">${on?'&#10003;':''}</span><span class="nm"><b>${esc(p.name)}</b>${sub}</span></button><button class="btn ghost sm ${hurt?'on':''}" onclick="toggleInjured('${p.id}')" aria-pressed="${hurt}">${hurt?'Healthy':'Injured'}</button><button class="btn ghost sm" onclick="openPlayer('${p.id}')">Edit</button></div>`;
+    const hurt=!!S.injured[p.id], out=!hurt&&!!S.out[p.id], n=P.N[p.id].overall;
+    const sub=hurt?'<span class="small neg"><b>Injured</b> · left out of teams</span>':out?'<span class="small neg"><b>Out today</b></span>':`<span class="small mute">${n?n+' game'+(n===1?'':'s')+' · '+Math.round(P.R[p.id].overall):'No games yet'}</span>`;
+    return `<div class="rrow ${hurt||out?'hurt':''}"><button class="tog" role="checkbox" aria-checked="${out}" aria-label="${esc(p.name)} out today" ${hurt?'disabled':''} onclick="toggleOut('${p.id}')"><span class="box ${out?'out':''}">${out||hurt?'&#10005;':''}</span><span class="nm"><b>${esc(p.name)}</b>${sub}</span></button><button class="btn ghost sm ${hurt?'on':''}" onclick="toggleInjured('${p.id}')" aria-pressed="${hurt}">${hurt?'Healthy':'Injured'}</button><button class="btn ghost sm" onclick="openPlayer('${p.id}')">Edit</button></div>`;
   }).join('');
-  return h+`<p class="small mute" style="margin-top:12px">Attendance resets each day. Injured stays on until you tap Healthy, so that player is skipped for teams every practice. Tap Edit to rename or remove someone.</p>`;
+  return h+`<p class="small mute" style="margin-top:12px">Everyone on the roster is in by default. Tap a name to mark them out for today; that resets each day. Injured stays on until you tap Healthy, so that player is skipped every practice. Tap Edit to rename or remove someone.</p>`;
 }
 
 function vTeams(){
   const here=S.players.filter(isHere).length;
   let h=`<h2>Make fair teams</h2>`;
   if(!S.players.length) return h+`<p class="mute">Add your players on the <button class="linkbtn" onclick="go('roster')">Roster</button> tab first.</p>`;
-  h+=`<p class="mute" style="margin:0 0 12px"><b>${here}</b> here today${S.players.some(p=>S.injured[p.id])?` (${S.players.filter(p=>S.injured[p.id]).length} injured, left out)`:''}. <button class="linkbtn" onclick="go('roster')">Change who's here</button></p>
+  h+=`<p class="mute" style="margin:0 0 12px"><b>${here}</b> playing today${S.players.some(p=>S.injured[p.id])?` (${S.players.filter(p=>S.injured[p.id]).length} injured, left out)`:''}. <button class="linkbtn" onclick="go('roster')">Change who's out</button></p>
   <div class="lbl">What are you playing?</div>
   <div class="fmts">${[3,4,5,6,7].map(n=>{const ok=here>=2*n;return `<button class="${UI.tn===n?'on':''}${ok?'':' off'}" onclick="pickFmt(${n})"><span class="num">${n}v${n}</span><span class="small">${ok?'ready':'need '+2*n}</span></button>`;}).join('')}</div>`;
-  if(!UI.tn) return h+`<p class="mute">Pick a game size and I'll split everyone who's here into the most even teams I can, using their ratings.</p>`;
+  if(!UI.tn) return h+`<p class="mute">Pick a game size and I'll split everyone who's playing today into the most even teams I can, using their ratings.</p>`;
   const n=UI.tn;
   if(!UI.tm) makeTeams();
   if(!UI.tm){
     const fits=[3,4,5,6,7].filter(k=>here>=2*k).map(k=>k+'v'+k);
-    return h+`<p class="warnline">${n}v${n} needs ${2*n} players and only ${here} ${here===1?'is':'are'} here.</p><p class="mute">${fits.length?'You have enough for '+fits.join(', ')+'.':'Mark more people as here to get started.'}</p>`;
+    return h+`<p class="warnline">${n}v${n} needs ${2*n} players and only ${here} ${here===1?'is':'are'} available.</p><p class="mute">${fits.length?'You have enough for '+fits.join(', ')+'.':'Check the Roster tab for anyone marked out or injured.'}</p>`;
   }
   const T=UI.tm, c=catFor(n);
   if(T.max>1){
@@ -486,16 +562,15 @@ function vTeams(){
 function vLog(){
   const A=side(1),B=side(2);
   let h='';
-  if(UI.msg) h+=`<div class="msg ${UI.err?'err':''}" role="status">${esc(UI.msg)}</div>`;
   const sorted=S.players.filter(isHere).sort((a,b)=>a.name.localeCompare(b.name));
   if(!S.players.length) h+=`<p class="mute">No one on the roster yet. <button class="linkbtn" onclick="go('roster')">Add your players</button> first.</p>`;
-  else if(!sorted.length) h+=`<p class="mute">No one is marked here today. <button class="linkbtn" onclick="go('roster')">Pick who showed up</button> on the Roster tab.</p>`;
-  else h+=`<p class="mute small" style="margin:0 0 4px">Tap a name to cycle: Light, Dark, sitting out. Missing someone? <button class="linkbtn" onclick="go('roster')">Edit who's here</button></p>`;
+  else if(!sorted.length) h+=`<p class="mute">No one is available today. <button class="linkbtn" onclick="go('roster')">Check who's out or injured</button> on the Roster tab.</p>`;
+  else h+=`<p class="mute small" style="margin:0 0 4px">Tap a name to cycle: Light, Dark, sitting out. Someone not here? <button class="linkbtn" onclick="go('roster')">Mark them out</button></p>`;
   h+=`<div class="chips">${sorted.map(p=>{
     const a=UI.assign[p.id]||0, cls=a===1?'lt':a===2?'dk':'';
     return `<button class="chip ${cls}" onclick="cyc('${p.id}')" aria-label="${esc(p.name)}: ${['sitting out','Light','Dark'][a]}"><b>${esc(p.name)}</b><span>${Math.round(P.R[p.id].overall)}${a?' · '+(a===1?'Light':'Dark'):''}</span></button>`;
   }).join('')}</div>`;
-  h+=`<div class="add"><input type="text" id="np" placeholder="Add someone who just showed up" aria-label="New player name" onkeydown="if(event.key==='Enter')addPlayer()"><button class="btn ghost" onclick="addPlayer()">Add</button></div>`;
+  h+=`<div class="add"><input type="text" id="np" placeholder="Add a new player" aria-label="New player name" onkeydown="if(event.key==='Enter')addPlayer()"><button class="btn ghost" onclick="addPlayer()">Add</button></div>`;
   h+=`<div class="seg" style="margin-top:14px"><button onclick="autoBalance()">Balance teams</button><button onclick="clearTeams()">Clear teams</button></div>`;
   h+=`<div class="sides"><span><span class="sw lt"></span>Light ${A.length}</span><span><span class="sw dk"></span>Dark ${B.length}</span></div>`;
   if(A.length&&B.length&&A.length!==B.length) h+=`<p class="warnline">Uneven teams: ${A.length} vs ${B.length}. Move someone so both sides match.</p>`;
@@ -532,7 +607,6 @@ function vGames(){
 function vData(){
   const s=S.settings;
   let h='';
-  if(UI.msg) h+=`<div class="msg ${UI.err?'err':''}" role="status">${esc(UI.msg)}</div>`;
   h+=`<h2>Rating settings</h2>
   <div class="set">
     <div><div class="lbl">K-factor</div><input type="number" value="${s.k}" min="1" onchange="setSetting('k',this.value)"></div>
@@ -542,6 +616,7 @@ function vData(){
   <label class="chk"><input type="checkbox" ${s.mov?'checked':''} onchange="setSetting('mov',this.checked)"><span>Scale changes by score margin. A 7-1 win moves ratings up to 1.5x more than a 7-6 win.</span></label>
   <h3>How ratings work</h3>
   <p class="small">Each team's strength is the average rating of its players. The expected result comes from the gap between the two averages, and every player on a team gains or loses the same amount. Overall counts every game. The 3v3 and 5v5 ratings only count games of that size, so you get a separate read on each format. Other sizes (4v4 and so on) still count toward Overall.</p>
+  ${accessHtml()}
   <h3>Back up your data</h3>
   <p class="small mute">Copy this text somewhere safe. Paste it back below to restore.</p>
   <textarea readonly onclick="this.select()" aria-label="Exported data">${esc(JSON.stringify(S))}</textarea>
@@ -557,12 +632,31 @@ function render(){
   const scrollY=window.scrollY;
   const tabs=[['board','Ratings'],['roster','Roster'],['teams','Teams'],['log','Log'],['games','Games'],['data','Data']];
   let body = UI.tab==='board' ? (UI.pid?vPlayer():vBoard()) : UI.tab==='roster' ? vRoster() : UI.tab==='teams' ? vTeams() : UI.tab==='log' ? vLog() : UI.tab==='games' ? vGames() : vData();
-  $('app').innerHTML=`<div class="top"><h1>Practice Elo</h1><span class="saved" id="saved">${savedText()}</span></div>
-    <nav class="tabs">${tabs.map(([k,l])=>`<button class="${UI.tab===k?'on':''}" onclick="go('${k}')">${l}</button>`).join('')}</nav>${body}`;
+  const unlock = UI.unlock&&!PASS ? `<div class="card" style="margin-bottom:12px"><div class="lbl">Team passcode</div>
+    <div class="add"><input type="password" id="pw" placeholder="Passcode" autocomplete="off" aria-label="Team passcode" onkeydown="if(event.key==='Enter')tryUnlock()"><button class="btn" onclick="tryUnlock()">Unlock</button></div>
+    <p class="small mute" style="margin:8px 0 0">Anyone can look at the ratings. The passcode is only needed to log games or change the roster, and this phone will remember it. <button class="linkbtn" onclick="UI.unlock=false;UI.lockMsg='';render()">Cancel</button></p>
+    ${UI.lockMsg?`<p class="warnline" style="margin:6px 0 0">${esc(UI.lockMsg)}</p>`:''}</div>` : '';
+  const msg = UI.msg ? `<div class="msg ${UI.err?'err':''}" role="status">${esc(UI.msg)}</div>` : '';
+  $('app').innerHTML=`<div class="top"><h1>Practice Elo</h1><span class="right"><span class="saved" id="saved">${savedText()}</span>${PASS?'':`<button class="btn ghost sm" onclick="UI.unlock=true;UI.lockMsg='';render()">Unlock</button>`}</span></div>
+    <nav class="tabs">${tabs.map(([k,l])=>`<button class="${UI.tab===k?'on':''}" onclick="go('${k}')">${l}</button>`).join('')}</nav>${unlock}${msg}${body}`;
   window.scrollTo(0,scrollY);
+  if(UI.unlock&&!PASS&&$('pw')&&!$('pw').dataset.f){ $('pw').focus(); }
 }
 
-(async function init(){ await load(); compute(); render(); })();
+(async function init(){
+  PASS=lsGet(PASS_KEY)||null;
+  try{const c=JSON.parse(lsGet(CACHE_KEY)||'null'); if(c&&c.data){S=normalize(c.data);}}catch(e){}
+  compute(); render();
+  try{ await pull(); loaded=true; setSync('ok'); }
+  catch(e){
+    if(e.status===404||e.status===400){ setSync('setup'); UI.msg='The team database is not set up yet. Run the setup script in Supabase, then reload.'; }
+    else { setSync('offline'); UI.msg='Could not reach the team database. Showing the last copy saved on this phone. Editing is off until it reconnects.'; }
+    UI.err=true;
+  }
+  compute(); render();
+  setInterval(poll,15000);
+  document.addEventListener('visibilitychange',()=>{ if(!document.hidden){ if(!loaded) pull().then(()=>{loaded=true;UI.msg='';setSync('ok');compute();render();}).catch(()=>{}); else poll(); } });
+})();
 </script>
 </body>
 </html>
