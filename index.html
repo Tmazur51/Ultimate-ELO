@@ -36,8 +36,9 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px soli
 .saved{font-size:12px;color:var(--mute)}
 .ver{font-family:var(--body);font-size:12px;font-weight:600;color:var(--mute);letter-spacing:0;margin-left:2px}
 .top .right{display:flex;align-items:center;gap:8px}
-.tabs{display:flex;gap:4px;border-bottom:2px solid var(--line);margin-bottom:14px;position:sticky;top:0;background:var(--bg);z-index:5}
-.tabs button{flex:1;background:none;border:none;padding:10px 1px;font-family:var(--display);font-size:16px;font-weight:700;color:var(--mute);border-bottom:4px solid transparent;margin-bottom:-2px}
+.tabs{display:flex;overflow-x:auto;scrollbar-width:none;gap:2px;border-bottom:2px solid var(--line);margin-bottom:14px;position:sticky;top:0;background:var(--bg);z-index:5}
+.tabs button{flex:1 0 auto;background:none;border:none;padding:10px 8px;font-family:var(--display);font-size:16px;font-weight:700;color:var(--mute);border-bottom:4px solid transparent;margin-bottom:-2px}
+.tabs::-webkit-scrollbar{display:none}
 .tabs button.on{color:var(--ink);border-bottom-color:var(--accent)}
 .seg{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
 .seg button{border:1.5px solid var(--line);background:var(--surface);border-radius:999px;padding:6px 14px;font-weight:600}
@@ -144,12 +145,12 @@ textarea{min-height:110px;font-family:ui-monospace,Menlo,monospace;font-size:12p
 <body>
 <div id="app"></div>
 <script>
-const APP_VERSION='v1.3';
+const APP_VERSION='v1.4';
 const KEY='ultimate-elo:v1';
 const CATS=['overall','3v3','5v5','7v7'];
 const CATNAME={overall:'Overall','3v3':'3v3','5v5':'5v5','7v7':'7v7'};
 let S={players:[],games:[],settings:{k:32,start:1000,mov:true},out:{},hereDate:'',injured:{},lines:{}};
-let UI={tab:'board',cat:'overall',pid:null,pcat:'overall',assign:{},tn:0,tg:0,tm:null,tmode:'fair',lf:7,field:0,sA:0,sB:0,confirm:null,msg:'',err:false,editG:null,sync:'loading',unlock:false,lockMsg:'',imp:''};
+let UI={tab:'board',cat:'overall',pid:null,pcat:'overall',assign:{},tn:0,tg:0,tm:null,lf:7,field:0,sA:0,sB:0,confirm:null,msg:'',err:false,editG:null,sync:'loading',unlock:false,lockMsg:'',imp:''};
 let P=null;
 
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -394,7 +395,6 @@ function makeTeams(){
   }
   UI.tm={n,games,out,max,ng,extra:rest.length,mode};
 }
-function setTmode(m){UI.tmode=m;render();}
 function setLf(k){UI.lf=k;render();}
 function cycLine(id){
   if(!canEdit()) return;
@@ -584,36 +584,37 @@ function vRoster(){
 
 function vLines(){
   const f=UI.lf||7, c=catFor(f);
-  const all=[...S.players].sort((a,b)=>a.name.localeCompare(b.name));
-  const O=S.players.filter(p=>S.lines[p.id]==='O'&&isHere(p)), D=S.players.filter(p=>S.lines[p.id]==='D'&&isHere(p));
-  const none=S.players.filter(p=>!S.lines[p.id]&&isHere(p));
-  let h=`<p class="small mute" style="margin:0 0 6px">Set each player's line once and it's saved for every practice. Tap a name to cycle: O-line, D-line, no line.</p>
-  <div class="chips">${all.map(p=>{const l=S.lines[p.id]||'', off=!isHere(p); return `<button class="chip ${l==='O'?'lt':l==='D'?'dk':''}" style="${off?'opacity:.45':''}" onclick="cycLine('${p.id}')"><b>${esc(p.name)}</b><span>${l?l+'-line':'no line'}${off?' · '+(S.injured[p.id]?'injured':'out today'):''}</span></button>`;}).join('')}</div>
-  <div class="lbl" style="margin-top:12px">Players on the field per side</div>
+  const byName=(x,y)=>x.name.localeCompare(y.name);
+  const O=S.players.filter(p=>S.lines[p.id]==='O').sort(byName), D=S.players.filter(p=>S.lines[p.id]==='D').sort(byName), N=S.players.filter(p=>!S.lines[p.id]).sort(byName);
+  let h=`<h2>Lines</h2>`;
+  if(!S.players.length) return h+`<p class="mute">Add your players on the <button class="linkbtn" onclick="go('roster')">Roster</button> tab first.</p>`;
+  const chip=(p,cls)=>{const off=!isHere(p);return `<button class="chip ${cls}" style="${off?'opacity:.45':''}" onclick="cycLine('${p.id}')" aria-label="${esc(p.name)}: tap to move to the next group"><b>${esc(p.name)}</b><span>${Math.round(effR(p.id,c))}${off?' · '+(S.injured[p.id]?'injured':'out today'):''}</span></button>`;};
+  const group=(label,list,cls,hint)=>{const here=list.filter(isHere).length;return `<h3 style="margin:14px 0 4px">${label} <span class="small mute" style="font-family:var(--body);font-weight:400">${list.length}${here!==list.length?' ('+here+' here today)':''}</span></h3>${list.length?`<div class="chips">${list.map(p=>chip(p,cls)).join('')}</div>`:`<p class="small mute" style="margin:0">${hint}</p>`}`;};
+  h+=`<p class="small mute" style="margin:0">Pick each player's line once. Tap a name to move them: O-line, then D-line, then no line. It's saved for every practice and for everyone.</p>`;
+  h+=group('O-line',O,'lt','No one yet. Tap a name under "No line" to add them.');
+  h+=group('D-line',D,'dk','No one yet. Tap a name under "No line" to add them.');
+  h+=group('No line',N,'','Everyone is on a line.');
+  const Oa=O.filter(isHere), Da=D.filter(isHere);
+  h+=`<h3>Matchup</h3><div class="lbl">Players on the field per side</div>
   <div class="seg">${[3,4,5,6,7].map(k=>`<button class="${f===k?'on':''}" onclick="setLf(${k})">${k}v${k}</button>`).join('')}</div>`;
-  if(!O.length||!D.length) return h+`<p class="mute">Put at least ${f} players on each line to see the matchup. Today: ${O.length} on the O-line, ${D.length} on the D-line.</p>`;
-  if(O.length<f||D.length<f) return h+`<p class="warnline">The ${O.length<f?'O-line has only '+O.length:'D-line has only '+D.length} here today, and ${f}v${f} needs ${f} on each side.</p>`;
-  const avg=pl=>pl.reduce((x,p)=>x+effR(p.id,c),0)/pl.length, aO=avg(O), aD=avg(D);
+  if(!Oa.length||!Da.length) return h+`<p class="mute">Put at least ${f} players here today on each line to see the matchup. Right now: ${Oa.length} on the O-line, ${Da.length} on the D-line.</p>`;
+  if(Oa.length<f||Da.length<f) return h+`<p class="warnline">The ${Oa.length<f?'O-line has only '+Oa.length:'D-line has only '+Da.length} here today, and ${f}v${f} needs ${f} on each side.</p>`;
+  const avg=pl=>pl.reduce((x,p)=>x+effR(p.id,c),0)/pl.length, aO=avg(Oa), aD=avg(Da);
   const pa=Math.round(100/(1+Math.pow(10,(aD-aO)/400))), gap=Math.abs(pa-50);
   const verdict=gap<=3?'Very even':gap<=8?'Even':(pa>50?'O-line':'D-line')+' favored';
-  const col=(pl,cls,label,a)=>`<div class="tcol ${cls}"><div class="th"><b>${label}</b><span class="small">${pl.length} · avg ${Math.round(a)}</span></div>${[...pl].sort((x,y)=>effR(y.id,c)-effR(x.id,c)).map(p=>`<div class="tp"><span>${esc(p.name)}</span><span class="num">${Math.round(effR(p.id,c))}</span></div>`).join('')}</div>`;
-  h+=`<h3>${f}v${f}: ${verdict}</h3>
+  h+=`<p style="margin:6px 0 0"><b>${f}v${f}: ${verdict}</b> · O-line ${Oa.length} (avg ${Math.round(aO)}) vs D-line ${Da.length} (avg ${Math.round(aD)})</p>
   <div class="bar" aria-label="Win chance"><div class="l" style="flex:${pa} 1 0">${pa}%</div><div class="d" style="flex:${100-pa} 1 0">${100-pa}%</div></div>
-  <div class="tcols">${col(O,'lt','O-line',aO)}${col(D,'dk','D-line',aD)}</div>
-  <p class="small mute" style="margin:10px 0 0">${O.length} vs ${D.length} players, ${f} on the field each side, rotating. These lines aren't balanced on purpose, so the bar shows who's favored. Ratings count each line's average, and the favored line gains little for a win.</p>
-  ${none.length?`<p class="small mute" style="margin:8px 0 0"><b>No line:</b> ${none.map(p=>esc(p.name)).join(', ')}</p>`:''}
+  <p class="small mute" style="margin:0">The lines aren't balanced on purpose, so the bar shows who's favored. The favored line gains little for a win and the other line gains more for an upset.</p>
   <p style="margin:12px 0 0"><button class="btn full" onclick="linesToLog()">Log this game</button></p>`;
   return h;
 }
 
 function vTeams(){
   const here=S.players.filter(isHere).length;
-  let h=`<h2>Make teams</h2>`;
+  let h=`<h2>Make fair teams</h2>`;
   if(!S.players.length) return h+`<p class="mute">Add your players on the <button class="linkbtn" onclick="go('roster')">Roster</button> tab first.</p>`;
   h+=`<p class="mute" style="margin:0 0 12px"><b>${here}</b> playing today${S.players.some(p=>S.injured[p.id])?` (${S.players.filter(p=>S.injured[p.id]).length} injured, left out)`:''}. <button class="linkbtn" onclick="go('roster')">Change who's out</button></p>
-  <div class="seg"><button class="${UI.tmode!=='lines'?'on':''}" onclick="setTmode('fair')">Fair teams</button><button class="${UI.tmode==='lines'?'on':''}" onclick="setTmode('lines')">O-line vs D-line</button></div>`;
-  if(UI.tmode==='lines') return h+vLines();
-  h+=`<div class="lbl">What are you playing?</div>
+  <div class="lbl">What are you playing?</div>
   <div class="fmts">${[3,4,5,6,7].map(n=>{const g=Math.floor(here/(2*n)),r=here-g*2*n,ok=g>=1;return `<button class="${UI.tn===n?'on':''}${ok?'':' off'}" onclick="pickFmt(${n})"><span class="num">${n}v${n}</span><span class="small">${ok?g+' game'+(g>1?'s':''):'need '+2*n}</span><span class="small">${ok?(r?r+' sub'+(r>1?'s':''):'fits all'):''}</span></button>`;}).join('')}</div>`;
   const fitList=[3,4,5,6,7].map(k=>({k,g:Math.floor(here/(2*k)),r:here%(2*k)})).filter(x=>x.g>=1);
   if(fitList.length){
@@ -729,8 +730,8 @@ function vData(){
 
 function render(){
   const scrollY=window.scrollY;
-  const tabs=[['board','Ratings'],['roster','Roster'],['teams','Teams'],['log','Log'],['games','Games'],['data','Data']];
-  let body = UI.tab==='board' ? (UI.pid?vPlayer():vBoard()) : UI.tab==='roster' ? vRoster() : UI.tab==='teams' ? vTeams() : UI.tab==='log' ? vLog() : UI.tab==='games' ? vGames() : vData();
+  const tabs=[['board','Ratings'],['roster','Roster'],['teams','Teams'],['lines','Lines'],['log','Log'],['games','Games'],['data','Data']];
+  let body = UI.tab==='board' ? (UI.pid?vPlayer():vBoard()) : UI.tab==='roster' ? vRoster() : UI.tab==='teams' ? vTeams() : UI.tab==='lines' ? vLines() : UI.tab==='log' ? vLog() : UI.tab==='games' ? vGames() : vData();
   const unlock = UI.unlock&&!PASS ? `<div class="card" style="margin-bottom:12px"><div class="lbl">Team passcode</div>
     <div class="add"><input type="password" id="pw" placeholder="Passcode" autocomplete="off" aria-label="Team passcode" onkeydown="if(event.key==='Enter')tryUnlock()"><button class="btn" onclick="tryUnlock()">Unlock</button></div>
     <p class="small mute" style="margin:8px 0 0">Anyone can look at the ratings. The passcode is only needed to log games or change the roster, and this phone will remember it. <button class="linkbtn" onclick="UI.unlock=false;UI.lockMsg='';render()">Cancel</button></p>
