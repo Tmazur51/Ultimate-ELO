@@ -128,6 +128,8 @@ textarea{min-height:110px;font-family:ui-monospace,Menlo,monospace;font-size:12p
 .tcol .tp{display:flex;justify-content:space-between;gap:8px;padding:5px 0;font-size:16px}
 .tcol .tp span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .tcol .tp .num{font-size:16px;opacity:.75}
+.tcol .subs{font-size:13px;margin-top:6px;padding-top:5px;border-top:1px dashed currentColor;opacity:.85}
+.fmts button{min-height:74px}
 .btn.sm{padding:6px 10px;font-size:14px;flex:none}
 .btn.sm.on{border-color:var(--neg);color:var(--neg)}
 .rrow.hurt .nm b{text-decoration:line-through;opacity:.7}
@@ -358,27 +360,47 @@ function allIn(){if(!canEdit())return;S.out={};UI.tm=null;save();render();}
 function pickFmt(n){UI.tn=n;UI.tg=0;UI.tm=null;render();}
 function setTg(g){UI.tg=g;UI.tm=null;render();}
 function remake(){UI.tm=null;render();}
+function playedMap(){ // games each player has already played today (from the shared game list)
+  const t=today(), m={};
+  S.games.forEach(g=>{ if(new Date(g.t).toLocaleDateString('en-CA')===t) [...g.A,...g.B].forEach(i=>m[i]=(m[i]||0)+1); });
+  return m;
+}
+function setExtra(v){UI.extra=v;UI.tm=null;render();}
 function makeTeams(){
   const n=UI.tn; UI.tm=null; if(!n) return;
   const need=2*n, pool=S.players.filter(isHere).map(p=>p.id);
   const max=Math.floor(pool.length/need); if(!max) return;
-  const ng=UI.tg?Math.min(UI.tg,max):max, c=catFor(n);
+  const ng=UI.tg?Math.min(UI.tg,max):max, c=catFor(n), pm=playedMap();
   for(let i=pool.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[pool[i],pool[j]]=[pool[j],pool[i]];}
-  const play=pool.slice(0,ng*need), out=pool.slice(ng*need);
+  pool.sort((a,b)=>(pm[a]||0)-(pm[b]||0)); // fewest games today play first, so sitting out rotates
+  const play=pool.slice(0,ng*need), rest=pool.slice(ng*need);
   play.sort((a,b)=>effR(b,c)-effR(a,c)); // similar-strength players share a field
   const games=[];
   for(let g=0;g<ng;g++){
     const r=balance(play.slice(g*need,(g+1)*need));
     if(!r||r==='big') return;
-    games.push(Math.random()<.5?r:{A:r.B,B:r.A});
+    const t=Math.random()<.5?r:{A:r.B,B:r.A};
+    games.push({A:t.A,B:t.B,subsA:[],subsB:[]});
   }
-  UI.tm={n,games,out,max,ng};
+  const mode=UI.extra==='sub'?'sub':'sit';
+  let out=rest;
+  if(mode==='sub'&&rest.length){
+    const slots=[]; games.forEach(g=>{slots.push({s:g.subsA,p:g.A},{s:g.subsB,p:g.B});});
+    const avg=ids=>ids.reduce((x,i)=>x+effR(i,c),0)/ids.length;
+    [...rest].sort((a,b)=>effR(b,c)-effR(a,c)).forEach(i=>{
+      slots.sort((x,y)=>x.s.length-y.s.length||avg(x.p)-avg(y.p)); // fewest subs first, then the weaker team
+      slots[0].s.push(i);
+    });
+    out=[];
+  }
+  UI.tm={n,games,out,max,ng,extra:rest.length,mode,pm};
 }
 function sendToLog(gi){
   const g=UI.tm.games[gi]; UI.assign={};
   g.A.forEach(i=>UI.assign[i]=1); g.B.forEach(i=>UI.assign[i]=2);
   UI.sA=0;UI.sB=0;UI.tab='log';UI.pid=null;UI.confirm=null;UI.err=false;
-  UI.msg='Teams loaded. Play the game, then enter the score.';
+  const sb=[...(g.subsA||[]),...(g.subsB||[])];
+  UI.msg='Teams loaded. Play the game, then enter the score.'+(sb.length?' Subs: '+sb.map(pname).join(', ')+'. If a sub plays, tap their name on this tab to swap them in.':'');
   render();window.scrollTo(0,0);
 }
 function autoBalance(){
@@ -550,29 +572,37 @@ function vTeams(){
   if(!S.players.length) return h+`<p class="mute">Add your players on the <button class="linkbtn" onclick="go('roster')">Roster</button> tab first.</p>`;
   h+=`<p class="mute" style="margin:0 0 12px"><b>${here}</b> playing today${S.players.some(p=>S.injured[p.id])?` (${S.players.filter(p=>S.injured[p.id]).length} injured, left out)`:''}. <button class="linkbtn" onclick="go('roster')">Change who's out</button></p>
   <div class="lbl">What are you playing?</div>
-  <div class="fmts">${[3,4,5,6,7].map(n=>{const ok=here>=2*n;return `<button class="${UI.tn===n?'on':''}${ok?'':' off'}" onclick="pickFmt(${n})"><span class="num">${n}v${n}</span><span class="small">${ok?'ready':'need '+2*n}</span></button>`;}).join('')}</div>`;
+  <div class="fmts">${[3,4,5,6,7].map(n=>{const g=Math.floor(here/(2*n)),r=here-g*2*n,ok=g>=1;return `<button class="${UI.tn===n?'on':''}${ok?'':' off'}" onclick="pickFmt(${n})"><span class="num">${n}v${n}</span><span class="small">${ok?g+' game'+(g>1?'s':''):'need '+2*n}</span><span class="small">${ok?(r?r+' extra':'fits all'):''}</span></button>`;}).join('')}</div>`;
+  const fitList=[3,4,5,6,7].map(k=>({k,g:Math.floor(here/(2*k)),r:here%(2*k)})).filter(x=>x.g>=1);
+  if(fitList.length){
+    const best=[...fitList].sort((x,y)=>x.r-y.r||y.k-x.k)[0];
+    h+=`<p class="small mute" style="margin:2px 0 0">Best fit for ${here} players: <b>${best.k}v${best.k}${best.g>1?' ×'+best.g:''}</b> (${best.r?best.r+' extra':'everyone plays'}).</p>`;
+  }
   if(!UI.tn) return h+`<p class="mute">Pick a game size and I'll split everyone who's playing today into the most even teams I can, using their ratings.</p>`;
   const n=UI.tn;
   if(!UI.tm) makeTeams();
   if(!UI.tm){
-    const fits=[3,4,5,6,7].filter(k=>here>=2*k).map(k=>k+'v'+k);
+    const fits=fitList.map(x=>x.k+'v'+x.k+(x.r?' ('+x.r+' extra)':''));
     return h+`<p class="warnline">${n}v${n} needs ${2*n} players and only ${here} ${here===1?'is':'are'} available.</p><p class="mute">${fits.length?'You have enough for '+fits.join(', ')+'.':'Check the Roster tab for anyone marked out or injured.'}</p>`;
   }
   const T=UI.tm, c=catFor(n);
   if(T.max>1){
     h+=`<div class="lbl" style="margin-top:12px">Games at once</div><div class="seg">${Array.from({length:T.max},(_,i)=>i+1).map(g=>`<button class="${T.ng===g?'on':''}" onclick="setTg(${g})">${g}</button>`).join('')}</div>`;
   }
+  if(T.extra>0){
+    h+=`<div class="lbl" style="margin-top:12px">${T.extra} extra player${T.extra>1?'s':''}</div><div class="seg"><button class="${T.mode==='sit'?'on':''}" onclick="setExtra('sit')">Rotate sit-outs</button><button class="${T.mode==='sub'?'on':''}" onclick="setExtra('sub')">Use as subs</button></div>`;
+  }
   T.games.forEach((g,gi)=>{
     const avg=ids=>ids.reduce((s,i)=>s+effR(i,c),0)/ids.length;
     const aA=avg(g.A), aB=avg(g.B), pa=Math.round(100/(1+Math.pow(10,(aB-aA)/400))), gap=Math.abs(pa-50);
     const verdict=gap<=3?'Very even':gap<=8?'Even':'Slight edge to '+(pa>50?'Light':'Dark');
-    const col=(ids,cls,label,a)=>`<div class="tcol ${cls}"><div class="th"><b>${label}</b><span class="small">avg ${Math.round(a)}</span></div>${[...ids].sort((x,y)=>effR(y,c)-effR(x,c)).map(i=>`<div class="tp"><span>${esc(pname(i))}</span><span class="num">${Math.round(effR(i,c))}</span></div>`).join('')}</div>`;
+    const col=(ids,cls,label,a,subs)=>`<div class="tcol ${cls}"><div class="th"><b>${label}</b><span class="small">avg ${Math.round(a)}</span></div>${[...ids].sort((x,y)=>effR(y,c)-effR(x,c)).map(i=>`<div class="tp"><span>${esc(pname(i))}</span><span class="num">${Math.round(effR(i,c))}</span></div>`).join('')}${subs&&subs.length?`<div class="subs">Sub: ${subs.map(i=>esc(pname(i))).join(', ')}</div>`:''}</div>`;
     h+=`<h3>${T.ng>1?'Game '+(gi+1)+' · ':''}${n}v${n}: ${verdict}</h3>
     <div class="bar" aria-label="Win chance"><div class="l" style="flex:${pa} 1 0">${pa}%</div><div class="d" style="flex:${100-pa} 1 0">${100-pa}%</div></div>
-    <div class="tcols">${col(g.A,'lt','Light',aA)}${col(g.B,'dk','Dark',aB)}</div>
+    <div class="tcols">${col(g.A,'lt','Light',aA,g.subsA)}${col(g.B,'dk','Dark',aB,g.subsB)}</div>
     <p style="margin:10px 0 0"><button class="btn ghost full" onclick="sendToLog(${gi})">Log this game</button></p>`;
   });
-  if(T.out.length) h+=`<p class="mute" style="margin-top:14px"><b>Sitting out:</b> ${T.out.map(i=>esc(pname(i))).join(', ')} <span class="small">(picked at random)</span></p>`;
+  if(T.out.length) h+=`<p class="mute" style="margin-top:14px"><b>Sitting out:</b> ${T.out.map(i=>esc(pname(i))).join(', ')} <div class="small">${Object.keys(T.pm).length?'Whoever has played the most games today sits first, so it rotates.':'Picked at random. Once games are logged, the people who sat out play next.'}</div></p>`;
   h+=`<p style="margin:14px 0 4px"><button class="btn full" onclick="remake()">Remake teams</button></p>
   <p class="small mute">Balanced by average rating. ${n===3||n===5?`Each player's ${n}v${n} rating is used once they have 3 games in that format, otherwise their overall rating.`:'Overall ratings are used for this game size.'} Numbers beside names are the ratings used.</p>`;
   return h;
