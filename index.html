@@ -53,7 +53,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px soli
 .pos{color:var(--pos)} .neg{color:var(--neg)}
 .prov{font-style:italic}
 .card{background:var(--surface);border:1.5px solid var(--line);border-radius:10px;padding:12px}
-.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:10px 0}
+.cards{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:10px 0}
 .cards button{background:var(--surface);border:1.5px solid var(--line);border-radius:10px;padding:10px 8px;text-align:left}
 .cards button.on{border-color:var(--accent);box-shadow:0 0 0 1.5px var(--accent)}
 .cards .num{font-size:30px;display:block;line-height:1.05}
@@ -144,19 +144,19 @@ textarea{min-height:110px;font-family:ui-monospace,Menlo,monospace;font-size:12p
 <body>
 <div id="app"></div>
 <script>
-const APP_VERSION='v1.1';
+const APP_VERSION='v1.3';
 const KEY='ultimate-elo:v1';
-const CATS=['overall','3v3','5v5'];
-const CATNAME={overall:'Overall','3v3':'3v3','5v5':'5v5'};
-let S={players:[],games:[],settings:{k:32,start:1000,mov:true},out:{},hereDate:'',injured:{}};
-let UI={tab:'board',cat:'overall',pid:null,pcat:'overall',assign:{},tn:0,tg:0,tm:null,sA:0,sB:0,confirm:null,msg:'',err:false,editG:null,sync:'loading',unlock:false,lockMsg:'',imp:''};
+const CATS=['overall','3v3','5v5','7v7'];
+const CATNAME={overall:'Overall','3v3':'3v3','5v5':'5v5','7v7':'7v7'};
+let S={players:[],games:[],settings:{k:32,start:1000,mov:true},out:{},hereDate:'',injured:{},lines:{}};
+let UI={tab:'board',cat:'overall',pid:null,pcat:'overall',assign:{},tn:0,tg:0,tm:null,tmode:'fair',lf:7,field:0,sA:0,sB:0,confirm:null,msg:'',err:false,editG:null,sync:'loading',unlock:false,lockMsg:'',imp:''};
 let P=null;
 
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,6);
 const $=id=>document.getElementById(id);
 const pname=id=>{const p=S.players.find(p=>p.id===id);return p?p.name:'(removed)'};
-const catFor=n=>n===3?'3v3':n===5?'5v5':'overall';
+const catFor=n=>n===3?'3v3':n===5?'5v5':n===7?'7v7':'overall';
 
 /* ---------- shared storage (Supabase) ---------- */
 const SB_URL='https://ggesapuymmsdwrdphcgf.supabase.co';
@@ -167,7 +167,7 @@ const today=()=>new Date().toLocaleDateString('en-CA');
 const isHere=p=>!S.out[p.id]&&!S.injured[p.id];
 function normalize(d){
   d=d||{};
-  const n={players:d.players||[],games:d.games||[],settings:Object.assign({k:32,start:1000,mov:true},d.settings||{}),out:d.out||{},hereDate:d.hereDate||'',injured:d.injured||{}};
+  const n={players:d.players||[],games:d.games||[],settings:Object.assign({k:32,start:1000,mov:true},d.settings||{}),out:d.out||{},hereDate:d.hereDate||'',injured:d.injured||{},lines:d.lines||{}};
   if(n.hereDate!==today()){n.out={};n.hereDate=today();} // "out today" resets each day
   return n;
 }
@@ -263,8 +263,8 @@ function compute(){
   const games=[...S.games].sort((a,b)=>a.t-b.t);
   for(const g of games){
     if(![...g.A,...g.B].every(i=>R[i])) continue;
-    const n=g.A.length, fmt=n+'v'+n;
-    const cats=['overall']; if(fmt==='3v3'||fmt==='5v5') cats.push(fmt);
+    const n=g.n||g.A.length, fmt=n+'v'+n; // n = players on the field per side, which can be smaller than the roster
+    const cats=['overall']; if(CATS.includes(fmt)) cats.push(fmt);
     const res=g.sA>g.sB?1:g.sA<g.sB?0:0.5;
     const margin=Math.abs(g.sA-g.sB), top=Math.max(g.sA,g.sB)||1;
     const mult=mov?1+0.5*margin/top:1;
@@ -322,7 +322,9 @@ function setCat(c){UI.cat=c;render();}
 function openPlayer(id){UI.pid=id;UI.pcat=UI.cat;UI.tab='board';render();window.scrollTo(0,0);}
 function setPcat(c){UI.pcat=c;render();}
 function cyc(id){UI.assign[id]=((UI.assign[id]||0)+1)%3;render();}
-function clearTeams(){UI.assign={};UI.msg='';render();}
+function clearTeams(){UI.assign={};UI.field=0;UI.msg='';render();}
+function setField(k){UI.field=k;render();}
+function fieldSize(A,B){const m=Math.min(A.length,B.length); return (UI.field&&UI.field<=m)?UI.field:Math.min(m,7);}
 function side(n){return S.players.filter(p=>UI.assign[p.id]===n).map(p=>p.id);}
 function step(w,d){const k=w==='A'?'sA':'sB';UI['s'+w]=Math.max(0,(+UI[k]||0)+d);render();}
 function addNames(raw){
@@ -364,20 +366,14 @@ function allIn(){if(!canEdit())return;S.out={};UI.tm=null;save();render();}
 function pickFmt(n){UI.tn=n;UI.tg=0;UI.tm=null;render();}
 function setTg(g){UI.tg=g;UI.tm=null;render();}
 function remake(){UI.tm=null;render();}
-function playedMap(){ // games each player has already played today (from the shared game list)
-  const t=today(), m={};
-  S.games.forEach(g=>{ if(new Date(g.t).toLocaleDateString('en-CA')===t) [...g.A,...g.B].forEach(i=>m[i]=(m[i]||0)+1); });
-  return m;
-}
 function makeTeams(){
   const n=UI.tn; UI.tm=null; if(!n) return;
   const need=2*n, pool=S.players.filter(isHere).map(p=>p.id);
   const max=Math.floor(pool.length/need); if(!max) return;
-  const ng=UI.tg?Math.min(UI.tg,max):max, c=catFor(n), pm=playedMap();
+  const ng=UI.tg?Math.min(UI.tg,max):max, c=catFor(n);
   for(let i=pool.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[pool[i],pool[j]]=[pool[j],pool[i]];}
-  pool.sort((a,b)=>(pm[a]||0)-(pm[b]||0)); // fewest games today play first, so sitting out rotates
-  const play=pool.slice(0,ng*need), rest=pool.slice(ng*need);
-  play.sort((a,b)=>effR(b,c)-effR(a,c)); // similar-strength players share a field
+  pool.sort((a,b)=>effR(b,c)-effR(a,c)); // highest rated first; ties stay in random order
+  const play=pool.slice(0,ng*need), rest=pool.slice(ng*need); // the lowest-rated players are the subs
   const games=[];
   for(let g=0;g<ng;g++){
     const r=balance(play.slice(g*need,(g+1)*need));
@@ -396,12 +392,27 @@ function makeTeams(){
     });
     out=[];
   }
-  UI.tm={n,games,out,max,ng,extra:rest.length,mode,pm};
+  UI.tm={n,games,out,max,ng,extra:rest.length,mode};
+}
+function setTmode(m){UI.tmode=m;render();}
+function setLf(k){UI.lf=k;render();}
+function cycLine(id){
+  if(!canEdit()) return;
+  const cur=S.lines[id]||'', nx=cur===''?'O':cur==='O'?'D':'';
+  if(nx) S.lines[id]=nx; else delete S.lines[id];
+  save(); render();
+}
+function linesToLog(){
+  UI.assign={};
+  S.players.filter(isHere).forEach(p=>{ if(S.lines[p.id]==='O') UI.assign[p.id]=1; else if(S.lines[p.id]==='D') UI.assign[p.id]=2; });
+  UI.field=UI.lf; UI.sA=0;UI.sB=0;UI.tab='log';UI.pid=null;UI.confirm=null;UI.err=false;
+  UI.msg='Lines loaded: O-line is Light, D-line is Dark. Play the game, then enter the score.';
+  render();window.scrollTo(0,0);
 }
 function sendToLog(gi){
   const g=UI.tm.games[gi]; UI.assign={};
   g.A.forEach(i=>UI.assign[i]=1); g.B.forEach(i=>UI.assign[i]=2);
-  UI.sA=0;UI.sB=0;UI.tab='log';UI.pid=null;UI.confirm=null;UI.err=false;
+  UI.field=0;UI.sA=0;UI.sB=0;UI.tab='log';UI.pid=null;UI.confirm=null;UI.err=false;
   const sb=[...(g.subsA||[]),...(g.subsB||[])];
   UI.msg='Teams loaded. Play the game, then enter the score.'+(sb.length?' Subs: '+sb.map(pname).join(', ')+'. If a sub plays, tap their name on this tab to swap them in.':'');
   render();window.scrollTo(0,0);
@@ -419,11 +430,12 @@ function recordGame(){
   const A=side(1),B=side(2);
   const sA=parseInt($('sA').value,10), sB=parseInt($('sB').value,10);
   UI.sA=isNaN(sA)?0:sA; UI.sB=isNaN(sB)?0:sB;
-  if(!A.length||A.length!==B.length){UI.msg='Both teams need the same number of players.';UI.err=true;return render();}
+  if(!A.length||!B.length){UI.msg='Pick players for both teams first.';UI.err=true;return render();}
   if(UI.sA===0&&UI.sB===0){UI.msg='Enter the final score first.';UI.err=true;return render();}
-  S.games.push({id:uid(),t:Date.now(),A,B,sA:UI.sA,sB:UI.sB});
+  const n=fieldSize(A,B);
+  S.games.push({id:uid(),t:Date.now(),A,B,n,sA:UI.sA,sB:UI.sB});
   compute(); save();
-  UI.msg=`${A.length}v${A.length} recorded: ${UI.sA}-${UI.sB}.`; UI.err=false; UI.sA=0;UI.sB=0;
+  UI.msg=`${n}v${n} recorded: ${UI.sA}-${UI.sB}.`; UI.err=false; UI.sA=0;UI.sB=0;
   render();
 }
 function editGame(id){
@@ -450,7 +462,7 @@ function delGame(id){
 function delPlayer(id){
   if(!canEdit()) return;
   if(UI.confirm!=='p'+id){UI.confirm='p'+id;return render();}
-  S.players=S.players.filter(p=>p.id!==id); delete UI.assign[id]; delete S.injured[id]; delete S.out[id]; UI.pid=null; UI.confirm=null; compute(); save(); render();
+  S.players=S.players.filter(p=>p.id!==id); delete UI.assign[id]; delete S.injured[id]; delete S.out[id]; delete S.lines[id]; UI.pid=null; UI.confirm=null; compute(); save(); render();
 }
 function renamePlayer(id){
   if(!canEdit()) return;
@@ -475,7 +487,7 @@ function doImport(){
 function resetAll(){
   if(!canEdit()) return;
   if(UI.confirm!=='reset'){UI.confirm='reset';return render();}
-  S.players=[];S.games=[];S.out={};S.injured={};UI.assign={};UI.confirm=null;UI.pid=null;compute();save();UI.msg='Everything cleared.';UI.err=false;render();
+  S.players=[];S.games=[];S.out={};S.injured={};S.lines={};UI.assign={};UI.confirm=null;UI.pid=null;compute();save();UI.msg='Everything cleared.';UI.err=false;render();
 }
 
 /* ---------- views ---------- */
@@ -530,9 +542,10 @@ function vPlayer(){
     const opps=Object.entries(st.opps[c]).map(([o,r])=>({o,r,g:r.w+r.l+r.t,p:pct(r.w,r.l,r.t)})).filter(x=>x.g>=2).sort((a,b)=>a.p-b.p||b.g-a.g);
     if(opps.length) ins.push(`Hardest opponent: <b>${esc(pname(opps[0].o))}</b> (${recStr(opps[0].r)} against).`);
   }
-  if(P.N[id]['3v3']>=3&&P.N[id]['5v5']>=3){
-    const d=P.R[id]['3v3']-P.R[id]['5v5'];
-    ins.push(Math.abs(d)<15?'Rated about the same in 3v3 and 5v5.':`Stronger in <b>${d>0?'3v3':'5v5'}</b> by ${Math.abs(Math.round(d))} points.`);
+  const fm=['3v3','5v5','7v7'].filter(k=>P.N[id][k]>=3);
+  if(fm.length>=2){
+    const srt=[...fm].sort((a,b)=>P.R[id][b]-P.R[id][a]), d=P.R[id][srt[0]]-P.R[id][srt[srt.length-1]];
+    ins.push(d<15?`Rated about the same in ${fm.join(', ')}.`:`Strongest in <b>${srt[0]}</b>, weakest in <b>${srt[srt.length-1]}</b> (${Math.round(d)} points apart).`);
   }
   const ratingNote=n&&n<5?`<p class="small mute prov">Provisional: ratings move faster for the first 10 games in each format.</p>`:'';
   return `<button class="back" onclick="UI.pid=null;render()">&larr; Ratings</button>
@@ -563,18 +576,44 @@ function vRoster(){
   const ps=[...S.players].sort((a,b)=>a.name.localeCompare(b.name));
   h+=ps.map(p=>{
     const hurt=!!S.injured[p.id], out=!hurt&&!!S.out[p.id], n=P.N[p.id].overall;
-    const sub=hurt?'<span class="small neg"><b>Injured</b> · left out of teams</span>':out?'<span class="small neg"><b>Out today</b></span>':`<span class="small mute">${n?n+' game'+(n===1?'':'s')+' · '+Math.round(P.R[p.id].overall):'No games yet'}</span>`;
+    const sub=hurt?'<span class="small neg"><b>Injured</b> · left out of teams</span>':out?'<span class="small neg"><b>Out today</b></span>':`<span class="small mute">${n?n+' game'+(n===1?'':'s')+' · '+Math.round(P.R[p.id].overall):'No games yet'}${S.lines[p.id]?' · '+S.lines[p.id]+'-line':''}</span>`;
     return `<div class="rrow ${hurt||out?'hurt':''}"><button class="tog" role="checkbox" aria-checked="${out}" aria-label="${esc(p.name)} out today" ${hurt?'disabled':''} onclick="toggleOut('${p.id}')"><span class="box ${out?'out':''}">${out||hurt?'&#10005;':''}</span><span class="nm"><b>${esc(p.name)}</b>${sub}</span></button><button class="btn ghost sm ${hurt?'on':''}" onclick="toggleInjured('${p.id}')" aria-pressed="${hurt}">${hurt?'Healthy':'Injured'}</button><button class="btn ghost sm" onclick="openPlayer('${p.id}')">Edit</button></div>`;
   }).join('');
   return h+`<p class="small mute" style="margin-top:12px">Everyone on the roster is in by default. Tap a name to mark them out for today; that resets each day. Injured stays on until you tap Healthy, so that player is skipped every practice. Tap Edit to rename or remove someone.</p>`;
 }
 
+function vLines(){
+  const f=UI.lf||7, c=catFor(f);
+  const all=[...S.players].sort((a,b)=>a.name.localeCompare(b.name));
+  const O=S.players.filter(p=>S.lines[p.id]==='O'&&isHere(p)), D=S.players.filter(p=>S.lines[p.id]==='D'&&isHere(p));
+  const none=S.players.filter(p=>!S.lines[p.id]&&isHere(p));
+  let h=`<p class="small mute" style="margin:0 0 6px">Set each player's line once and it's saved for every practice. Tap a name to cycle: O-line, D-line, no line.</p>
+  <div class="chips">${all.map(p=>{const l=S.lines[p.id]||'', off=!isHere(p); return `<button class="chip ${l==='O'?'lt':l==='D'?'dk':''}" style="${off?'opacity:.45':''}" onclick="cycLine('${p.id}')"><b>${esc(p.name)}</b><span>${l?l+'-line':'no line'}${off?' · '+(S.injured[p.id]?'injured':'out today'):''}</span></button>`;}).join('')}</div>
+  <div class="lbl" style="margin-top:12px">Players on the field per side</div>
+  <div class="seg">${[3,4,5,6,7].map(k=>`<button class="${f===k?'on':''}" onclick="setLf(${k})">${k}v${k}</button>`).join('')}</div>`;
+  if(!O.length||!D.length) return h+`<p class="mute">Put at least ${f} players on each line to see the matchup. Today: ${O.length} on the O-line, ${D.length} on the D-line.</p>`;
+  if(O.length<f||D.length<f) return h+`<p class="warnline">The ${O.length<f?'O-line has only '+O.length:'D-line has only '+D.length} here today, and ${f}v${f} needs ${f} on each side.</p>`;
+  const avg=pl=>pl.reduce((x,p)=>x+effR(p.id,c),0)/pl.length, aO=avg(O), aD=avg(D);
+  const pa=Math.round(100/(1+Math.pow(10,(aD-aO)/400))), gap=Math.abs(pa-50);
+  const verdict=gap<=3?'Very even':gap<=8?'Even':(pa>50?'O-line':'D-line')+' favored';
+  const col=(pl,cls,label,a)=>`<div class="tcol ${cls}"><div class="th"><b>${label}</b><span class="small">${pl.length} · avg ${Math.round(a)}</span></div>${[...pl].sort((x,y)=>effR(y.id,c)-effR(x.id,c)).map(p=>`<div class="tp"><span>${esc(p.name)}</span><span class="num">${Math.round(effR(p.id,c))}</span></div>`).join('')}</div>`;
+  h+=`<h3>${f}v${f}: ${verdict}</h3>
+  <div class="bar" aria-label="Win chance"><div class="l" style="flex:${pa} 1 0">${pa}%</div><div class="d" style="flex:${100-pa} 1 0">${100-pa}%</div></div>
+  <div class="tcols">${col(O,'lt','O-line',aO)}${col(D,'dk','D-line',aD)}</div>
+  <p class="small mute" style="margin:10px 0 0">${O.length} vs ${D.length} players, ${f} on the field each side, rotating. These lines aren't balanced on purpose, so the bar shows who's favored. Ratings count each line's average, and the favored line gains little for a win.</p>
+  ${none.length?`<p class="small mute" style="margin:8px 0 0"><b>No line:</b> ${none.map(p=>esc(p.name)).join(', ')}</p>`:''}
+  <p style="margin:12px 0 0"><button class="btn full" onclick="linesToLog()">Log this game</button></p>`;
+  return h;
+}
+
 function vTeams(){
   const here=S.players.filter(isHere).length;
-  let h=`<h2>Make fair teams</h2>`;
+  let h=`<h2>Make teams</h2>`;
   if(!S.players.length) return h+`<p class="mute">Add your players on the <button class="linkbtn" onclick="go('roster')">Roster</button> tab first.</p>`;
   h+=`<p class="mute" style="margin:0 0 12px"><b>${here}</b> playing today${S.players.some(p=>S.injured[p.id])?` (${S.players.filter(p=>S.injured[p.id]).length} injured, left out)`:''}. <button class="linkbtn" onclick="go('roster')">Change who's out</button></p>
-  <div class="lbl">What are you playing?</div>
+  <div class="seg"><button class="${UI.tmode!=='lines'?'on':''}" onclick="setTmode('fair')">Fair teams</button><button class="${UI.tmode==='lines'?'on':''}" onclick="setTmode('lines')">O-line vs D-line</button></div>`;
+  if(UI.tmode==='lines') return h+vLines();
+  h+=`<div class="lbl">What are you playing?</div>
   <div class="fmts">${[3,4,5,6,7].map(n=>{const g=Math.floor(here/(2*n)),r=here-g*2*n,ok=g>=1;return `<button class="${UI.tn===n?'on':''}${ok?'':' off'}" onclick="pickFmt(${n})"><span class="num">${n}v${n}</span><span class="small">${ok?g+' game'+(g>1?'s':''):'need '+2*n}</span><span class="small">${ok?(r?r+' sub'+(r>1?'s':''):'fits all'):''}</span></button>`;}).join('')}</div>`;
   const fitList=[3,4,5,6,7].map(k=>({k,g:Math.floor(here/(2*k)),r:here%(2*k)})).filter(x=>x.g>=1);
   if(fitList.length){
@@ -595,7 +634,7 @@ function vTeams(){
   if(T.extra>0){
     const sizes={}; T.games.forEach(g=>[g.A.length+g.subsA.length,g.B.length+g.subsB.length].forEach(z=>sizes[z]=(sizes[z]||0)+1));
     const txt=Object.keys(sizes).sort((x,y)=>y-x).map(z=>sizes[z]+' team'+(sizes[z]>1?'s':'')+' of '+z).join(' and ');
-    h+=`<p class="small" style="margin:12px 0 0"><b>${txt}.</b> The ${T.extra} extra player${T.extra>1?'s join':' joins'} teams as subs, so every game is still ${n}v${n} on the field. Subs are whoever has played the most today.</p>`;
+    h+=`<p class="small" style="margin:12px 0 0"><b>${txt}.</b> The ${T.extra} extra player${T.extra>1?'s join':' joins'} teams as subs, so every game is still ${n}v${n} on the field. Subs are the lowest-rated players available.</p>`;
   }
   T.games.forEach((g,gi)=>{
     const avg=ids=>ids.reduce((s,i)=>s+effR(i,c),0)/ids.length;
@@ -607,9 +646,8 @@ function vTeams(){
     <div class="tcols">${col(g.A,'lt','Light',aA,g.subsA)}${col(g.B,'dk','Dark',aB,g.subsB)}</div>
     <p style="margin:10px 0 0"><button class="btn ghost full" onclick="sendToLog(${gi})">Log this game</button></p>`;
   });
-  if(T.out.length) h+=`<p class="mute" style="margin-top:14px"><b>Sitting out:</b> ${T.out.map(i=>esc(pname(i))).join(', ')} <div class="small">${Object.keys(T.pm).length?'Whoever has played the most games today sits first, so it rotates.':'Picked at random. Once games are logged, the people who sat out play next.'}</div></p>`;
   h+=`<p style="margin:14px 0 4px"><button class="btn full" onclick="remake()">Remake teams</button></p>
-  <p class="small mute">Balanced by average rating. ${n===3||n===5?`Each player's ${n}v${n} rating is used once they have 3 games in that format, otherwise their overall rating.`:'Overall ratings are used for this game size.'} Numbers beside names are the ratings used.</p>`;
+  <p class="small mute">Balanced by average rating. ${n===3||n===5||n===7?`Each player's ${n}v${n} rating is used once they have 3 games in that format, otherwise their overall rating.`:'Overall ratings are used for this game size.'} Numbers beside names are the ratings used.</p>`;
   return h;
 }
 
@@ -627,12 +665,16 @@ function vLog(){
   h+=`<div class="add"><input type="text" id="np" placeholder="Add a new player" aria-label="New player name" onkeydown="if(event.key==='Enter')addPlayer()"><button class="btn ghost" onclick="addPlayer()">Add</button></div>`;
   h+=`<div class="seg" style="margin-top:14px"><button onclick="autoBalance()">Balance teams</button><button onclick="clearTeams()">Clear teams</button></div>`;
   h+=`<div class="sides"><span><span class="sw lt"></span>Light ${A.length}</span><span><span class="sw dk"></span>Dark ${B.length}</span></div>`;
-  if(A.length&&B.length&&A.length!==B.length) h+=`<p class="warnline">Uneven teams: ${A.length} vs ${B.length}. Move someone so both sides match.</p>`;
-  if(A.length&&A.length===B.length){
-    const c=catFor(A.length), avg=ids=>ids.reduce((s,i)=>s+effR(i,c),0)/ids.length;
+  const fs=(A.length&&B.length)?fieldSize(A,B):0;
+  if(fs&&(A.length!==B.length||A.length>7)){
+    h+=`<div class="lbl" style="margin-top:10px">Players on the field per side</div><div class="seg">${[3,4,5,6,7].filter(k=>k<=Math.min(A.length,B.length)).map(k=>`<button class="${fs===k?'on':''}" onclick="setField(${k})">${k}v${k}</button>`).join('')}</div>
+    <p class="small mute" style="margin:0 0 6px">${A.length} Light and ${B.length} Dark players rotate, ${fs} on the field at a time. Everyone listed gets the rating change.</p>`;
+  }
+  if(fs){
+    const c=catFor(fs), avg=ids=>ids.reduce((s,i)=>s+effR(i,c),0)/ids.length;
     const e=1/(1+Math.pow(10,(avg(B)-avg(A))/400)), pa=Math.round(e*100);
     h+=`<div class="bar" aria-label="Win chance"><div class="l" style="flex:${pa} 1 0">${pa}%</div><div class="d" style="flex:${100-pa} 1 0">${100-pa}%</div></div>
-        <div class="small mute">${A.length}v${A.length} win chance by rating (Light vs Dark)</div>`;
+        <div class="small mute">${fs}v${fs} win chance by rating (Light vs Dark)</div>`;
   }
   h+=`<div class="scores">
     <div><div class="lbl"><span class="sw lt"></span>Light score</div><div class="step"><button onclick="step('A',-1)" aria-label="Light minus one">&minus;</button><input id="sA" type="number" inputmode="numeric" min="0" value="${UI.sA}" oninput="UI.sA=+this.value"><button onclick="step('A',1)" aria-label="Light plus one">+</button></div></div>
@@ -648,13 +690,13 @@ function vGames(){
   for(const g of gs){
     const d=new Date(g.t).toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'});
     if(d!==last){h+=`<div class="date">${d}</div>`;last=d;}
-    const n=g.A.length, c=catFor(n), aw=g.sA>g.sB, bw=g.sB>g.sA, D=P.D[g.id]||{};
+    const n=g.n||g.A.length, c=catFor(n), aw=g.sA>g.sB, bw=g.sB>g.sA, D=P.D[g.id]||{};
     const names=(ids,win)=>ids.map(i=>{const dl=D[i]&&D[i].overall; return `${esc(pname(i))}${dl!=null?` <span class="delta ${dl>=0?'pos':'neg'}">${dl>=0?'+':''}${dl.toFixed(0)}</span>`:''}`;}).join(', ');
     const ed=UI.editG===g.id;
     const score=ed?`<span class="sc"><input id="eA" class="se" type="number" inputmode="numeric" min="0" value="${g.sA}" aria-label="Light score"> &ndash; <input id="eB" class="se" type="number" inputmode="numeric" min="0" value="${g.sB}" aria-label="Dark score"></span>`:`<span class="sc">${g.sA} &ndash; ${g.sB}</span>`;
     const btns=ed?`<span class="gb"><button class="btn sm" onclick="saveGame('${g.id}')">Save</button><button class="btn ghost sm" onclick="cancelEdit()">Cancel</button></span>`
       :`<span class="gb"><button class="btn ghost sm" onclick="editGame('${g.id}')">Edit</button><button class="btn ghost sm ${UI.confirm==='g'+g.id?'warn':''}" onclick="delGame('${g.id}')">${UI.confirm==='g'+g.id?'Tap again':'Delete'}</button></span>`;
-    h+=`<div class="game"><div class="hd"><span class="small mute">${n}v${n}</span>${score}${btns}</div>
+    h+=`<div class="game"><div class="hd"><span class="small mute">${n}v${n}${g.A.length!==g.B.length||g.A.length!==n?`<br>${g.A.length} vs ${g.B.length}`:''}</span>${score}${btns}</div>
       <div class="tm ${aw?'w':''}"><span class="sw lt"></span>${names(g.A)}</div>
       <div class="tm ${bw?'w':''}"><span class="sw dk"></span>${names(g.B)}</div>${ed?'<div class="small mute" style="margin-top:6px">Light first, Dark second. Saving recalculates every rating.</div>':''}</div>`;
   }
@@ -672,7 +714,7 @@ function vData(){
   <p class="small mute" style="margin-top:-4px">K-factor is how far one game moves ratings. 32 suits a small group. Each player's first 10 games in a format count 1.5x so ratings settle quickly.</p>
   <label class="chk"><input type="checkbox" ${s.mov?'checked':''} onchange="setSetting('mov',this.checked)"><span>Scale changes by score margin. A 7-1 win moves ratings up to 1.5x more than a 7-6 win.</span></label>
   <h3>How ratings work</h3>
-  <p class="small">Each team's strength is the average rating of its players. The expected result comes from the gap between the two averages, and every player on a team gains or loses the same amount. Overall counts every game. The 3v3 and 5v5 ratings only count games of that size, so you get a separate read on each format. Other sizes (4v4 and so on) still count toward Overall.</p>
+  <p class="small">Each team's strength is the average rating of its players. The expected result comes from the gap between the two averages, and every player on a team gains or loses the same amount. Overall counts every game. The 3v3, 5v5 and 7v7 ratings only count games of that size, so you get a separate read on each format. Other sizes (4v4 and so on) still count toward Overall.</p>
   ${accessHtml()}
   <h3>Back up your data</h3>
   <p class="small mute">Copy this text somewhere safe. Paste it back below to restore.</p>
