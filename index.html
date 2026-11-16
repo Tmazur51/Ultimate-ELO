@@ -108,6 +108,14 @@ svg.chart{width:100%;height:auto;display:block}
 label.chk{display:flex;gap:10px;align-items:flex-start;font-size:15px;margin:8px 0}
 label.chk input{width:20px;height:20px;margin-top:2px;accent-color:var(--accent)}
 textarea{min-height:110px;font-family:ui-monospace,Menlo,monospace;font-size:12px}
+.lrow{display:flex;align-items:center;gap:10px;padding:8px 2px;border-bottom:1px solid var(--line)}
+.lrow .nm{flex:1;min-width:0}.lrow .nm b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:17px}
+.lsel{display:flex;gap:8px}
+.lb{width:52px;height:44px;border-radius:10px;border:2px solid var(--line);background:var(--surface);font-family:var(--display);font-size:22px;font-weight:700;color:var(--mute)}
+.lb.o{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.lb.d{background:var(--dk-bg);border-color:var(--dk-line);color:var(--dk-ink)}
+.counts{display:flex;gap:16px;font-size:15px;padding:6px 0;border-bottom:2px solid var(--line)}
+.counts b{font-family:var(--display);font-size:20px}
 .rrow{display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line)}
 .rrow .tog{flex:1;min-width:0;display:flex;align-items:center;gap:12px;background:none;border:none;text-align:left;padding:10px 4px}
 .rrow .nm{min-width:0}.rrow .nm b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:17px}
@@ -145,7 +153,7 @@ textarea{min-height:110px;font-family:ui-monospace,Menlo,monospace;font-size:12p
 <body>
 <div id="app"></div>
 <script>
-const APP_VERSION='v1.4';
+const APP_VERSION='v1.5';
 const KEY='ultimate-elo:v1';
 const CATS=['overall','3v3','5v5','7v7'];
 const CATNAME={overall:'Overall','3v3':'3v3','5v5':'5v5','7v7':'7v7'};
@@ -396,10 +404,14 @@ function makeTeams(){
   UI.tm={n,games,out,max,ng,extra:rest.length,mode};
 }
 function setLf(k){UI.lf=k;render();}
-function cycLine(id){
+function setLine(id,l){
   if(!canEdit()) return;
-  const cur=S.lines[id]||'', nx=cur===''?'O':cur==='O'?'D':'';
-  if(nx) S.lines[id]=nx; else delete S.lines[id];
+  if(S.lines[id]===l) delete S.lines[id]; else S.lines[id]=l; // tap the same button again to clear
+  save(); render();
+}
+function restToD(){
+  if(!canEdit()) return;
+  S.players.forEach(p=>{ if(!S.lines[p.id]) S.lines[p.id]='D'; });
   save(); render();
 }
 function linesToLog(){
@@ -588,12 +600,15 @@ function vLines(){
   const O=S.players.filter(p=>S.lines[p.id]==='O').sort(byName), D=S.players.filter(p=>S.lines[p.id]==='D').sort(byName), N=S.players.filter(p=>!S.lines[p.id]).sort(byName);
   let h=`<h2>Lines</h2>`;
   if(!S.players.length) return h+`<p class="mute">Add your players on the <button class="linkbtn" onclick="go('roster')">Roster</button> tab first.</p>`;
-  const chip=(p,cls)=>{const off=!isHere(p);return `<button class="chip ${cls}" style="${off?'opacity:.45':''}" onclick="cycLine('${p.id}')" aria-label="${esc(p.name)}: tap to move to the next group"><b>${esc(p.name)}</b><span>${Math.round(effR(p.id,c))}${off?' · '+(S.injured[p.id]?'injured':'out today'):''}</span></button>`;};
-  const group=(label,list,cls,hint)=>{const here=list.filter(isHere).length;return `<h3 style="margin:14px 0 4px">${label} <span class="small mute" style="font-family:var(--body);font-weight:400">${list.length}${here!==list.length?' ('+here+' here today)':''}</span></h3>${list.length?`<div class="chips">${list.map(p=>chip(p,cls)).join('')}</div>`:`<p class="small mute" style="margin:0">${hint}</p>`}`;};
-  h+=`<p class="small mute" style="margin:0">Pick each player's line once. Tap a name to move them: O-line, then D-line, then no line. It's saved for every practice and for everyone.</p>`;
-  h+=group('O-line',O,'lt','No one yet. Tap a name under "No line" to add them.');
-  h+=group('D-line',D,'dk','No one yet. Tap a name under "No line" to add them.');
-  h+=group('No line',N,'','Everyone is on a line.');
+  const row=p=>{
+    const l=S.lines[p.id]||'', off=!isHere(p);
+    return `<div class="lrow" style="${off?'opacity:.55':''}"><span class="nm"><b>${esc(p.name)}</b><span class="small mute">${Math.round(effR(p.id,c))}${off?' · '+(S.injured[p.id]?'injured':'out today'):''}</span></span>
+      <span class="lsel"><button class="lb ${l==='O'?'o':''}" aria-pressed="${l==='O'}" aria-label="${esc(p.name)} O-line" onclick="setLine('${p.id}','O')">O</button><button class="lb ${l==='D'?'d':''}" aria-pressed="${l==='D'}" aria-label="${esc(p.name)} D-line" onclick="setLine('${p.id}','D')">D</button></span></div>`;
+  };
+  h+=`<p class="small mute" style="margin:0 0 8px">Tap <b>O</b> or <b>D</b> next to each name. Tap the same button again to clear it. It's saved for every practice and for everyone.</p>
+  <div class="counts"><span><b>${O.length}</b> O-line</span><span><b>${D.length}</b> D-line</span><span><b>${N.length}</b> no line</span></div>
+  ${N.length?`<p style="margin:8px 0 0"><button class="btn ghost" onclick="restToD()">Put the ${N.length} with no line on D-line</button></p>`:''}
+  <div style="margin-top:6px">${[...S.players].sort(byName).map(row).join('')}</div>`;
   const Oa=O.filter(isHere), Da=D.filter(isHere);
   h+=`<h3>Matchup</h3><div class="lbl">Players on the field per side</div>
   <div class="seg">${[3,4,5,6,7].map(k=>`<button class="${f===k?'on':''}" onclick="setLf(${k})">${k}v${k}</button>`).join('')}</div>`;
