@@ -139,6 +139,11 @@ textarea{min-height:110px;font-family:ui-monospace,Menlo,monospace;font-size:12p
 .tcol .tp span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .tcol .tp .num{font-size:16px;opacity:.75}
 .tcol .subrow{font-size:15px}
+.tcol.neutral{background:var(--surface);color:var(--ink);border:2px solid var(--line)}
+.match{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 2px;border-bottom:1px solid var(--line)}
+.match .w{font-weight:700}
+.match .ms{font-family:var(--display);font-size:20px;font-weight:700}
+.seg button.warn{background:var(--neg);color:#fff;border-color:var(--neg)}
 .tcol .subrow:first-of-type{}
 .subtag{font-style:normal;font-size:10px;font-weight:700;text-transform:uppercase;border:1px solid currentColor;border-radius:4px;padding:0 4px;margin-left:4px;opacity:.8;vertical-align:1px}
 .fmts button{min-height:74px}
@@ -153,12 +158,12 @@ textarea{min-height:110px;font-family:ui-monospace,Menlo,monospace;font-size:12p
 <body>
 <div id="app"></div>
 <script>
-const APP_VERSION='v1.5';
+const APP_VERSION='v1.6';
 const KEY='ultimate-elo:v1';
 const CATS=['overall','3v3','5v5','7v7'];
 const CATNAME={overall:'Overall','3v3':'3v3','5v5':'5v5','7v7':'7v7'};
-let S={players:[],games:[],settings:{k:32,start:1000,mov:true},out:{},hereDate:'',injured:{},lines:{}};
-let UI={tab:'board',cat:'overall',pid:null,pcat:'overall',assign:{},tn:0,tg:0,tm:null,lf:7,field:0,sA:0,sB:0,confirm:null,msg:'',err:false,editG:null,sync:'loading',unlock:false,lockMsg:'',imp:''};
+let S={players:[],games:[],settings:{k:32,start:1000,mov:true},out:{},hereDate:'',injured:{},lines:{},night:null};
+let UI={tab:'board',cat:'overall',pid:null,pcat:'overall',assign:{},tn:0,tg:0,tm:null,lf:7,field:0,tmode:'games',rrn:3,rrt:0,rredit:false,rract:0,pendingM:null,sA:0,sB:0,confirm:null,msg:'',err:false,editG:null,sync:'loading',unlock:false,lockMsg:'',imp:''};
 let P=null;
 
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -176,8 +181,9 @@ const today=()=>new Date().toLocaleDateString('en-CA');
 const isHere=p=>!S.out[p.id]&&!S.injured[p.id];
 function normalize(d){
   d=d||{};
-  const n={players:d.players||[],games:d.games||[],settings:Object.assign({k:32,start:1000,mov:true},d.settings||{}),out:d.out||{},hereDate:d.hereDate||'',injured:d.injured||{},lines:d.lines||{}};
+  const n={players:d.players||[],games:d.games||[],settings:Object.assign({k:32,start:1000,mov:true},d.settings||{}),out:d.out||{},hereDate:d.hereDate||'',injured:d.injured||{},lines:d.lines||{},night:d.night||null};
   if(n.hereDate!==today()){n.out={};n.hereDate=today();} // "out today" resets each day
+  if(n.night&&n.night.date!==today()) n.night=null; // tonight's teams reset each day
   return n;
 }
 async function rpc(name,body){
@@ -330,8 +336,8 @@ function go(tab){UI.tab=tab;UI.pid=null;UI.msg='';UI.confirm=null;UI.editG=null;
 function setCat(c){UI.cat=c;render();}
 function openPlayer(id){UI.pid=id;UI.pcat=UI.cat;UI.tab='board';render();window.scrollTo(0,0);}
 function setPcat(c){UI.pcat=c;render();}
-function cyc(id){UI.assign[id]=((UI.assign[id]||0)+1)%3;render();}
-function clearTeams(){UI.assign={};UI.field=0;UI.msg='';render();}
+function cyc(id){UI.assign[id]=((UI.assign[id]||0)+1)%3;UI.pendingM=null;render();}
+function clearTeams(){UI.assign={};UI.field=0;UI.pendingM=null;UI.msg='';render();}
 function setField(k){UI.field=k;render();}
 function fieldSize(A,B){const m=Math.min(A.length,B.length); return (UI.field&&UI.field<=m)?UI.field:Math.min(m,7);}
 function side(n){return S.players.filter(p=>UI.assign[p.id]===n).map(p=>p.id);}
@@ -417,14 +423,131 @@ function restToD(){
 function linesToLog(){
   UI.assign={};
   S.players.filter(isHere).forEach(p=>{ if(S.lines[p.id]==='O') UI.assign[p.id]=1; else if(S.lines[p.id]==='D') UI.assign[p.id]=2; });
-  UI.field=UI.lf; UI.sA=0;UI.sB=0;UI.tab='log';UI.pid=null;UI.confirm=null;UI.err=false;
+  UI.field=UI.lf; UI.pendingM=null; UI.sA=0;UI.sB=0;UI.tab='log';UI.pid=null;UI.confirm=null;UI.err=false;
   UI.msg='Lines loaded: O-line is Light, D-line is Dark. Play the game, then enter the score.';
   render();window.scrollTo(0,0);
+}
+/* ---------- round robin: balanced or hand-picked teams for the night ---------- */
+const hereId=id=>{const p=S.players.find(p=>p.id===id);return !!p&&isHere(p);};
+const rrState=()=>(S.night&&S.night.date===today())?S.night:null;
+function setRrn(k){UI.rrn=k;UI.rrt=0;render();}
+function setRrt(k){UI.rrt=k;render();}
+function setTmode(m){UI.tmode=m;render();}
+function shuffle(a){for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;}
+function partition(ids,t,n,c){ // split into t teams of n whose total ratings are as close as possible
+  const r=id=>effR(id,c), total=ids.reduce((x,i)=>x+r(i),0), mean=total/t, sols=[];
+  for(let rs=0;rs<30;rs++){
+    const sh=shuffle([...ids]), teams=Array.from({length:t},(_,k)=>sh.slice(k*n,(k+1)*n));
+    const sums=teams.map(tm=>tm.reduce((x,i)=>x+r(i),0));
+    let improved=true;
+    while(improved){
+      improved=false;
+      for(let a=0;a<t;a++)for(let b=a+1;b<t;b++)for(let i=0;i<n;i++)for(let j=0;j<n;j++){
+        const ra=r(teams[a][i]), rb=r(teams[b][j]), na=sums[a]-ra+rb, nb=sums[b]-rb+ra;
+        const d=(na-mean)**2+(nb-mean)**2-(sums[a]-mean)**2-(sums[b]-mean)**2;
+        if(d<-1e-9){const x=teams[a][i];teams[a][i]=teams[b][j];teams[b][j]=x;sums[a]=na;sums[b]=nb;improved=true;}
+      }
+    }
+    sols.push({teams,spread:(Math.max(...sums)-Math.min(...sums))/n});
+  }
+  sols.sort((x,y)=>x.spread-y.spread);
+  const near=sols.filter(x=>x.spread<=sols[0].spread+2);
+  return near[Math.floor(Math.random()*near.length)].teams;
+}
+function rrCount(n){const avail=S.players.filter(isHere).length,maxT=Math.floor(avail/n);return {avail,maxT,t:UI.rrt?Math.min(UI.rrt,maxT):maxT};}
+function makeRR(){
+  if(!canEdit()) return;
+  const n=UI.rrn, {avail,maxT,t}=rrCount(n);
+  if(maxT<2){UI.msg=`Round robin needs at least ${2*n} players for teams of ${n}.`;UI.err=true;return render();}
+  const c=catFor(n), pool=shuffle(S.players.filter(isHere).map(p=>p.id));
+  pool.sort((a,b)=>effR(b,c)-effR(a,c));
+  const starters=pool.slice(0,t*n), extras=pool.slice(t*n);
+  const teams=partition(starters,t,n,c).map(pl=>({players:pl,subs:[]}));
+  const avg=tm=>tm.players.reduce((x,i)=>x+effR(i,c),0)/tm.players.length;
+  [...extras].sort((a,b)=>effR(b,c)-effR(a,c)).forEach(i=>{ // extras join as subs, weakest teams first
+    const idx=teams.map((_,k)=>k).sort((x,y)=>teams[x].subs.length-teams[y].subs.length||avg(teams[x])-avg(teams[y]));
+    teams[idx[0]].subs.push(i);
+  });
+  const id=uid();
+  S.night={id,date:today(),n,teams:teams.map((tm,k)=>({id:id+'-'+(k+1),name:'Team '+(k+1),players:tm.players,subs:tm.subs}))};
+  UI.rredit=false; UI.confirm=null; UI.msg=''; save(); render();
+}
+function rrRemake(){
+  if(!canEdit()) return;
+  const nt=rrState(); if(!nt) return;
+  if(rrResults(nt).count>0&&UI.confirm!=='rrmake'){UI.confirm='rrmake';return render();}
+  UI.rrn=nt.n; UI.rrt=nt.teams.length; makeRR();
+}
+function startManual(){
+  if(!canEdit()) return;
+  const n=UI.rrn, {maxT,t}=rrCount(n), cnt=Math.min(12,Math.max(2,maxT>=2?t:2)), id=uid();
+  S.night={id,date:today(),n,teams:Array.from({length:cnt},(_,k)=>({id:id+'-'+(k+1),name:'Team '+(k+1),players:[],subs:[]}))};
+  UI.rredit=true; UI.rract=0; UI.confirm=null; save(); render();
+}
+function rrEdit(){ if(!canEdit()) return; UI.rredit=true; UI.rract=0; render(); }
+function rrDone(){UI.rredit=false;render();}
+function rrActive(k){UI.rract=k;render();}
+function rrAssign(pid){
+  if(!canEdit()) return;
+  const nt=rrState(); if(!nt||!nt.teams[UI.rract]) return;
+  const cur=nt.teams.findIndex(t=>t.players.includes(pid));
+  nt.teams.forEach(t=>{t.players=t.players.filter(i=>i!==pid);t.subs=(t.subs||[]).filter(i=>i!==pid);});
+  if(cur!==UI.rract) nt.teams[UI.rract].players.push(pid); // tapping a player on the active team removes them
+  save(); render();
+}
+function rrAddTeam(){
+  if(!canEdit()) return; const nt=rrState(); if(!nt||nt.teams.length>=12) return;
+  const k=nt.teams.length; nt.teams.push({id:nt.id+'-'+(k+1),name:'Team '+(k+1),players:[],subs:[]}); UI.rract=k; save(); render();
+}
+function rrDelTeam(){
+  if(!canEdit()) return; const nt=rrState(); if(!nt||nt.teams.length<=2) return;
+  nt.teams.pop(); if(UI.rract>=nt.teams.length) UI.rract=nt.teams.length-1; save(); render();
+}
+function rrSetN(k){ if(!canEdit()) return; const nt=rrState(); if(!nt) return; nt.n=k; save(); render(); }
+function renameTeam(k,v){ if(!canEdit()) return; const nt=rrState(); if(!nt||!nt.teams[k]) return; nt.teams[k].name=(v||'').trim()||'Team '+(k+1); save(); render(); }
+function rrClear(){
+  if(!canEdit()) return;
+  if(UI.confirm!=='rrclear'){UI.confirm='rrclear';return render();}
+  S.night=null; UI.rredit=false; UI.confirm=null; save(); render();
+}
+function rrToLog(a,b){
+  const nt=rrState(); if(!nt) return; const A=nt.teams[a], B=nt.teams[b];
+  UI.assign={};
+  [...A.players,...(A.subs||[])].filter(hereId).forEach(i=>UI.assign[i]=1);
+  [...B.players,...(B.subs||[])].filter(hereId).forEach(i=>UI.assign[i]=2);
+  UI.field=nt.n; UI.pendingM=[A.id,B.id]; UI.sA=0;UI.sB=0;UI.tab='log';UI.pid=null;UI.confirm=null;UI.err=false;
+  UI.msg=`${A.name} is Light and ${B.name} is Dark. Play the game, then enter the score.`;
+  render();window.scrollTo(0,0);
+}
+function rrSchedule(T){ // circle method: everyone plays everyone once, odd counts get a bye
+  const arr=[...Array(T).keys()]; if(T%2) arr.push(-1);
+  const m=arr.length, rounds=[];
+  for(let r=0;r<m-1;r++){
+    const pairs=[],bye=[];
+    for(let i=0;i<m/2;i++){const a=arr[i],b=arr[m-1-i]; if(a<0)bye.push(b); else if(b<0)bye.push(a); else pairs.push([a,b]);}
+    rounds.push({pairs,bye}); arr.splice(1,0,arr.pop());
+  }
+  return rounds;
+}
+function rrResults(nt){
+  const idx={}; nt.teams.forEach((t,k)=>idx[t.id]=k);
+  const t0=today(), played={}, stand=nt.teams.map(()=>({w:0,l:0,t:0,pf:0,pa:0}));
+  S.games.forEach(g=>{
+    if(!g.m||idx[g.m[0]]===undefined||idx[g.m[1]]===undefined) return;
+    if(new Date(g.t).toLocaleDateString('en-CA')!==t0) return;
+    const a=idx[g.m[0]], b=idx[g.m[1]];
+    played[Math.min(a,b)+'-'+Math.max(a,b)]={a,b,sA:g.sA,sB:g.sB};
+  });
+  Object.values(played).forEach(({a,b,sA,sB})=>{
+    stand[a].pf+=sA;stand[a].pa+=sB;stand[b].pf+=sB;stand[b].pa+=sA;
+    if(sA>sB){stand[a].w++;stand[b].l++;}else if(sA<sB){stand[b].w++;stand[a].l++;}else{stand[a].t++;stand[b].t++;}
+  });
+  return {played,stand,count:Object.keys(played).length};
 }
 function sendToLog(gi){
   const g=UI.tm.games[gi]; UI.assign={};
   g.A.forEach(i=>UI.assign[i]=1); g.B.forEach(i=>UI.assign[i]=2);
-  UI.field=0;UI.sA=0;UI.sB=0;UI.tab='log';UI.pid=null;UI.confirm=null;UI.err=false;
+  UI.field=0;UI.pendingM=null;UI.sA=0;UI.sB=0;UI.tab='log';UI.pid=null;UI.confirm=null;UI.err=false;
   const sb=[...(g.subsA||[]),...(g.subsB||[])];
   UI.msg='Teams loaded. Play the game, then enter the score.'+(sb.length?' Subs: '+sb.map(pname).join(', ')+'. If a sub plays, tap their name on this tab to swap them in.':'');
   render();window.scrollTo(0,0);
@@ -445,7 +568,8 @@ function recordGame(){
   if(!A.length||!B.length){UI.msg='Pick players for both teams first.';UI.err=true;return render();}
   if(UI.sA===0&&UI.sB===0){UI.msg='Enter the final score first.';UI.err=true;return render();}
   const n=fieldSize(A,B);
-  S.games.push({id:uid(),t:Date.now(),A,B,n,sA:UI.sA,sB:UI.sB});
+  S.games.push({id:uid(),t:Date.now(),A,B,n,sA:UI.sA,sB:UI.sB,...(UI.pendingM?{m:UI.pendingM}:{})});
+  UI.pendingM=null;
   compute(); save();
   UI.msg=`${n}v${n} recorded: ${UI.sA}-${UI.sB}.`; UI.err=false; UI.sA=0;UI.sB=0;
   render();
@@ -499,7 +623,7 @@ function doImport(){
 function resetAll(){
   if(!canEdit()) return;
   if(UI.confirm!=='reset'){UI.confirm='reset';return render();}
-  S.players=[];S.games=[];S.out={};S.injured={};S.lines={};UI.assign={};UI.confirm=null;UI.pid=null;compute();save();UI.msg='Everything cleared.';UI.err=false;render();
+  S.players=[];S.games=[];S.out={};S.injured={};S.lines={};S.night=null;UI.assign={};UI.confirm=null;UI.pid=null;compute();save();UI.msg='Everything cleared.';UI.err=false;render();
 }
 
 /* ---------- views ---------- */
@@ -624,12 +748,67 @@ function vLines(){
   return h;
 }
 
+function vRREdit(nt){
+  const c=catFor(nt.n), here=S.players.filter(isHere).sort((x,y)=>x.name.localeCompare(y.name));
+  const teamOf=id=>nt.teams.findIndex(t=>t.players.includes(id)), hue=k=>(k*47+10)%360;
+  const act=nt.teams[UI.rract]||nt.teams[0];
+  const un=here.filter(p=>teamOf(p.id)<0).length;
+  let h=`<h3 style="margin-top:6px">Pick your own teams</h3>
+  <div class="lbl">Players per team</div><div class="seg">${[3,4,5,6,7].map(k=>`<button class="${nt.n===k?'on':''}" onclick="rrSetN(${k})">${k}v${k}</button>`).join('')}</div>
+  <div class="lbl">1. Choose a team</div>
+  <div class="seg">${nt.teams.map((t,k)=>`<button class="${UI.rract===k?'on':''}" style="border-color:hsl(${hue(k)} 55% 42%);border-width:3px" onclick="rrActive(${k})">${esc(t.name)} · ${t.players.filter(hereId).length}</button>`).join('')}<button onclick="rrAddTeam()" aria-label="Add a team">+ Team</button><button onclick="rrDelTeam()" aria-label="Remove the last team">&minus; Team</button></div>
+  <div class="add" style="margin-bottom:10px"><input type="text" id="tname" value="${esc(act.name)}" aria-label="Team name" onchange="renameTeam(${UI.rract},this.value)"></div>
+  <div class="lbl">2. Tap players to put them on ${esc(act.name)} <span class="small mute" style="margin-left:6px;font-weight:400">${un} not on a team</span></div>
+  <div class="chips">${here.map(p=>{const k=teamOf(p.id);return `<button class="chip" style="${k>=0?`background:hsl(${hue(k)} 70% 86%);border:2px solid hsl(${hue(k)} 55% ${k===UI.rract?'25%':'42%'});color:#14211A;${k===UI.rract?'box-shadow:0 0 0 2px hsl('+hue(k)+' 55% 25%)':''}`:''}" onclick="rrAssign('${p.id}')"><b>${esc(p.name)}</b><span>${k>=0?esc(nt.teams[k].name):Math.round(effR(p.id,c))}</span></button>`;}).join('')}</div>
+  <p class="small mute">Tap a player already on the active team to take them off. Tap a player on another team to move them here. Teams don't have to be the same size.</p>
+  <p><button class="btn full" onclick="rrDone()">Done</button></p>`;
+  return h;
+}
+function vRR(){
+  const nt=rrState(), here=S.players.filter(isHere);
+  let h='';
+  if(!nt){
+    const n=UI.rrn||3, {maxT,t}=rrCount(n);
+    h+=`<div class="lbl">Players per team</div><div class="seg">${[3,4,5,6,7].map(k=>`<button class="${n===k?'on':''}" onclick="setRrn(${k})">${k}v${k}</button>`).join('')}</div>`;
+    if(maxT<2) return h+`<p class="warnline">A round robin needs at least ${2*n} players for teams of ${n}. ${here.length} ${here.length===1?'is':'are'} here today.</p><p class="mute small">You can still <button class="linkbtn" onclick="startManual()">pick your own teams</button>.</p>`;
+    h+=`<div class="lbl" style="margin-top:6px">Number of teams</div><div class="seg">${Array.from({length:Math.min(maxT,12)-1},(_,i)=>i+2).map(k=>`<button class="${t===k?'on':''}" onclick="setRrt(${k})">${k}</button>`).join('')}</div>`;
+    const extra=here.length-t*n;
+    h+=`<p class="small mute">${t} teams of ${n}${extra?`. The ${extra} extra player${extra>1?'s join':' joins'} as subs (the lowest-rated)`:''}. Every team plays every other team once.</p>
+    <p><button class="btn full" onclick="makeRR()">Make balanced teams</button></p>
+    <p><button class="btn ghost full" onclick="startManual()">Pick my own teams</button></p>`;
+    return h;
+  }
+  if(UI.rredit) return vRREdit(nt);
+  const c=catFor(nt.n), res=rrResults(nt);
+  const T=nt.teams.map(tm=>({tm,pl:tm.players.filter(hereId),sub:(tm.subs||[]).filter(hereId)}));
+  const avgs=T.map(x=>x.pl.length?x.pl.reduce((q,i)=>q+effR(i,c),0)/x.pl.length:0);
+  const spread=Math.max(...avgs)-Math.min(...avgs);
+  h+=`<h3 style="margin-top:6px">Tonight's teams</h3>
+  <p class="small mute" style="margin:0 0 8px">${T.length} teams, ${nt.n}v${nt.n}. Average ratings are within <b>${Math.round(spread)}</b> point${Math.round(spread)===1?'':'s'} of each other.</p>
+  <div class="tcols">${T.map((x,k)=>`<div class="tcol neutral"><div class="th"><b>${esc(x.tm.name)}</b><span class="small">avg ${Math.round(avgs[k])}</span></div>${[...x.pl].sort((a,b)=>effR(b,c)-effR(a,c)).map(i=>`<div class="tp"><span>${esc(pname(i))}</span><span class="num">${Math.round(effR(i,c))}</span></div>`).join('')}${x.sub.map(i=>`<div class="tp subrow"><span>${esc(pname(i))} <em class="subtag">sub</em></span><span class="num">${Math.round(effR(i,c))}</span></div>`).join('')}</div>`).join('')}</div>`;
+  const sched=rrSchedule(T.length), nm=k=>esc(nt.teams[k].name);
+  h+=`<h3>Schedule</h3>`+sched.map((rd,ri)=>`<div class="date" style="margin-top:10px">Round ${ri+1}</div>`+rd.pairs.map(([a,b])=>{
+    const pl=res.played[Math.min(a,b)+'-'+Math.max(a,b)];
+    let right=`<button class="btn ghost sm" onclick="rrToLog(${a},${b})">Log</button>`, left=`${nm(a)} <span class="mute">vs</span> ${nm(b)}`;
+    if(pl){const sa=pl.a===a?pl.sA:pl.sB, sb=pl.a===a?pl.sB:pl.sA; left=`<span class="${sa>sb?'w':''}">${nm(a)}</span> <span class="mute">vs</span> <span class="${sb>sa?'w':''}">${nm(b)}</span>`; right=`<span class="ms">${sa}&ndash;${sb}</span>`;}
+    return `<div class="match"><span>${left}</span>${right}</div>`;
+  }).join('')+(rd.bye.length?`<div class="small mute" style="padding:6px 2px">Bye: ${rd.bye.map(nm).join(', ')}</div>`:'')).join('');
+  const order=T.map((_,k)=>k).sort((a,b)=>res.stand[b].w-res.stand[a].w||(res.stand[b].pf-res.stand[b].pa)-(res.stand[a].pf-res.stand[a].pa));
+  h+=`<h3>Standings</h3>${res.count?`<table><tr><th>Team</th><th class="r">W-L</th><th class="r">Pts +/-</th></tr>${order.map(k=>{const st=res.stand[k],d=st.pf-st.pa;return `<tr><td>${nm(k)}</td><td class="r">${st.w}-${st.l}${st.t?'-'+st.t:''}</td><td class="r ${d>0?'pos':d<0?'neg':''}">${d>0?'+':''}${d}</td></tr>`;}).join('')}</table>`:`<p class="small mute">Standings appear after the first game is logged.</p>`}
+  <h3>Manage</h3>
+  <div class="seg"><button onclick="rrEdit()">Edit teams</button><button class="${UI.confirm==='rrmake'?'warn':''}" onclick="rrRemake()">${UI.confirm==='rrmake'?'Tap again: remake and reset results':'Remake balanced'}</button><button class="${UI.confirm==='rrclear'?'warn':''}" onclick="rrClear()">${UI.confirm==='rrclear'?'Tap again to clear':'Clear tonight'}</button></div>
+  <p class="small mute">Teams stay the same until tomorrow, on every phone. Games logged from the schedule still count toward ratings like any other game.</p>`;
+  return h;
+}
+
 function vTeams(){
   const here=S.players.filter(isHere).length;
-  let h=`<h2>Make fair teams</h2>`;
+  let h=`<h2>Teams</h2>`;
   if(!S.players.length) return h+`<p class="mute">Add your players on the <button class="linkbtn" onclick="go('roster')">Roster</button> tab first.</p>`;
   h+=`<p class="mute" style="margin:0 0 12px"><b>${here}</b> playing today${S.players.some(p=>S.injured[p.id])?` (${S.players.filter(p=>S.injured[p.id]).length} injured, left out)`:''}. <button class="linkbtn" onclick="go('roster')">Change who's out</button></p>
-  <div class="lbl">What are you playing?</div>
+  <div class="seg"><button class="${UI.tmode!=='rr'?'on':''}" onclick="setTmode('games')">Single games</button><button class="${UI.tmode==='rr'?'on':''}" onclick="setTmode('rr')">Round robin</button></div>`;
+  if(UI.tmode==='rr') return h+vRR();
+  h+=`<div class="lbl">What are you playing?</div>
   <div class="fmts">${[3,4,5,6,7].map(n=>{const g=Math.floor(here/(2*n)),r=here-g*2*n,ok=g>=1;return `<button class="${UI.tn===n?'on':''}${ok?'':' off'}" onclick="pickFmt(${n})"><span class="num">${n}v${n}</span><span class="small">${ok?g+' game'+(g>1?'s':''):'need '+2*n}</span><span class="small">${ok?(r?r+' sub'+(r>1?'s':''):'fits all'):''}</span></button>`;}).join('')}</div>`;
   const fitList=[3,4,5,6,7].map(k=>({k,g:Math.floor(here/(2*k)),r:here%(2*k)})).filter(x=>x.g>=1);
   if(fitList.length){
