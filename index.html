@@ -80,7 +80,6 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px soli
 .step input{width:100%;min-width:0;border:none;background:none;text-align:center;font-family:var(--display);font-size:32px;font-weight:700;color:var(--ink);-moz-appearance:textfield}
 .step input::-webkit-outer-spin-button,.step input::-webkit-inner-spin-button{-webkit-appearance:none}
 .lbl{font-weight:600;font-size:14px;margin-bottom:4px;display:flex;align-items:center}
-select.sel{font:inherit;color:var(--ink);background:var(--surface);border:1.5px solid var(--line);border-radius:8px;padding:10px;width:100%}
 input[type=text],input[type=number],textarea{font:inherit;color:var(--ink);background:var(--surface);border:1.5px solid var(--line);border-radius:8px;padding:10px;width:100%}
 .add{display:flex;gap:8px;margin-top:6px}
 .msg{padding:10px 12px;border-radius:8px;background:var(--surface);border:1.5px solid var(--line);margin-bottom:10px;font-weight:600}
@@ -165,12 +164,12 @@ textarea{min-height:110px;font-family:ui-monospace,Menlo,monospace;font-size:12p
 <body>
 <div id="app"></div>
 <script>
-const APP_VERSION='v1.9';
+const APP_VERSION='v1.8';
 const KEY='ultimate-elo:v1';
 const CATS=['overall','3v3','5v5','7v7'];
 const CATNAME={overall:'Overall','3v3':'3v3','5v5':'5v5','7v7':'7v7'};
 let S={players:[],games:[],settings:{k:32,start:1000,mov:true},out:{},hereDate:'',injured:{},lines:{},night:null};
-let UI={tab:'board',cat:'overall',pid:null,pcat:'overall',assign:{},tn:0,tg:0,tm:null,lf:7,field:0,sel:null,pract:'',subMode:'mid',rrn:3,rrt:0,rredit:false,rract:0,pendingM:null,sA:0,sB:0,confirm:null,msg:'',err:false,editG:null,sync:'loading',unlock:false,lockMsg:'',imp:''};
+let UI={tab:'board',cat:'overall',pid:null,pcat:'overall',assign:{},tn:0,tg:0,tm:null,lf:7,field:0,sel:null,subMode:'mid',rrn:3,rrt:0,rredit:false,rract:0,pendingM:null,sA:0,sB:0,confirm:null,msg:'',err:false,editG:null,sync:'loading',unlock:false,lockMsg:'',imp:''};
 let P=null;
 
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -275,10 +274,10 @@ function accessHtml(){
 /* ---------- Elo engine (everything is recomputed from the game list) ---------- */
 function compute(){
   const {k,mov,start}=S.settings;
-  const R={},N={},H={},HT={},ST={},D={};
+  const R={},N={},H={},ST={},D={};
   S.players.forEach(p=>{
-    R[p.id]={};N[p.id]={};H[p.id]={};HT[p.id]={};
-    CATS.forEach(c=>{R[p.id][c]=start;N[p.id][c]=0;H[p.id][c]=[start];HT[p.id][c]=[];});
+    R[p.id]={};N[p.id]={};H[p.id]={};
+    CATS.forEach(c=>{R[p.id][c]=start;N[p.id][c]=0;H[p.id][c]=[start];});
     ST[p.id]={rec:{},mates:{},opps:{}};
     CATS.forEach(c=>{ST[p.id].rec[c]={w:0,l:0,t:0,pf:0,pa:0};ST[p.id].mates[c]={};ST[p.id].opps[c]={};});
   });
@@ -296,7 +295,7 @@ function compute(){
       const eA=1/(1+Math.pow(10,(avg(g.B)-avg(g.A))/400));
       const upd=(ids,e,s)=>ids.forEach(i=>{
         const d=(N[i][c]<10?1.5:1)*k*mult*(s-e);
-        R[i][c]+=d; N[i][c]++; H[i][c].push(R[i][c]); HT[i][c].push(g.t);
+        R[i][c]+=d; N[i][c]++; H[i][c].push(R[i][c]);
         (D[g.id][i]=D[g.id][i]||{})[c]=d;
       });
       upd(g.A,eA,res); upd(g.B,1-eA,1-res);
@@ -310,7 +309,7 @@ function compute(){
       rec(g.A,g.B,res,g.sA,g.sB); rec(g.B,g.A,1-res,g.sB,g.sA);
     }
   }
-  P={R,N,H,HT,ST,D};
+  P={R,N,H,ST,D};
 }
 // use the format rating once someone has 3+ games in it, otherwise fall back to overall
 const effR=(id,c)=>(c!=='overall'&&P.N[id][c]>=3)?P.R[id][c]:P.R[id].overall;
@@ -633,47 +632,20 @@ function chart(h,start){
     <polyline class="ln" points="${pts}"/><circle class="dot" cx="${x(h.length-1)}" cy="${y(h[h.length-1])}" r="4"/></svg>`;
 }
 
-/* ---------- practice-by-practice changes ---------- */
-const dayKey=t=>new Date(t).toLocaleDateString('en-CA');
-const dayLabel=k=>new Date(k+'T12:00:00').toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'});
-function practices(){return [...new Set(S.games.map(g=>dayKey(g.t)))].sort().reverse();}
-function dayDelta(id,c,day){ // net rating change over every game this player played in one practice
-  if(!P.H[id]) return null;
-  const H=P.H[id][c], T=P.HT[id][c];
-  if(day==='all'){ return T.length?{d:H[H.length-1]-H[0],g:T.length,end:H[H.length-1]}:null; }
-  let first=-1,last=-1;
-  for(let i=0;i<T.length;i++){ if(dayKey(T[i])===day){ if(first<0) first=i; last=i; } }
-  return first<0?null:{d:H[last+1]-H[first],g:last-first+1,end:H[last+1]};
-}
-function practiceRows(id,c){
-  const days={};
-  [...S.games].sort((a,b)=>a.t-b.t).forEach(g=>{
-    const inA=g.A.includes(id), inB=g.B.includes(id); if(!inA&&!inB) return;
-    const n=g.n||g.A.length; if(c!=='overall'&&catFor(n)!==c) return;
-    const k=dayKey(g.t), r=days[k]=days[k]||{w:0,l:0,t:0};
-    const mine=inA?g.sA:g.sB, theirs=inA?g.sB:g.sA;
-    if(mine>theirs) r.w++; else if(mine<theirs) r.l++; else r.t++;
-  });
-  return Object.keys(days).sort().reverse().map(k=>({day:k,...days[k],...dayDelta(id,c,k)}));
-}
-const chg=d=>{const v=Math.round(d);return (v>0?'+':'')+v;};
 function vBoard(){
   const c=UI.cat;
   const seg=`<div class="seg">${CATS.map(k=>`<button class="${c===k?'on':''}" onclick="setCat('${k}')">${CATNAME[k]}</button>`).join('')}</div>`;
   if(!S.players.length) return seg+`<p class="mute">No players yet. Open Log game, add your roster, and record your first mini game.</p>`;
-  const days=practices(), sel=(UI.pract==='all'||days.includes(UI.pract))?UI.pract:(days[0]||'');
-  const picker=days.length?`<div class="lbl" style="margin-top:2px">Rating change for</div><select class="sel" aria-label="Practice" onchange="UI.pract=this.value;render()">${days.map((k,i)=>`<option value="${k}" ${sel===k?'selected':''}>${dayLabel(k)}${i===0?' (latest)':''}</option>`).join('')}<option value="all" ${sel==='all'?'selected':''}>All time</option></select>
-  <p class="small mute" style="margin:6px 0 4px">The +/- under each rating is that player's net change over all their ${CATNAME[c]==='Overall'?'':CATNAME[c]+' '}games ${sel==='all'?'so far':'at that practice'}. A dash means they didn't play.</p>`:'';
   const ps=S.players.map(p=>({p,r:P.R[p.id][c],n:P.N[p.id][c]}));
   const ranked=ps.filter(x=>x.n>0).sort((a,b)=>b.r-a.r), unr=ps.filter(x=>x.n===0).sort((a,b)=>a.p.name.localeCompare(b.p.name));
   const row=(x,i)=>{
-    const dd=x.n?dayDelta(x.p.id,c,sel):null, rec=P.ST[x.p.id].rec[c];
+    const h=P.H[x.p.id][c], d=h.length>1?h[h.length-1]-h[h.length-2]:0, rec=P.ST[x.p.id].rec[c];
     return `<button class="row" onclick="openPlayer('${x.p.id}')">
       <span class="rk">${i!=null?i+1:''}</span>
       <span class="nm"><b>${esc(x.p.name)}</b><span class="small mute">${x.n} game${x.n===1?'':'s'}${x.n?' · '+recStr(rec):''}${x.n&&x.n<5?' · <span class="prov">provisional</span>':''}</span></span>
-      <span class="rt"><span class="num">${Math.round(x.r)}</span>${x.n?`<br>${dd?`<span class="delta ${dd.d>=0?'pos':'neg'}">${chg(dd.d)}</span> <span class="small mute">${dd.g}g</span>`:`<span class="small mute">&ndash;</span>`}`:''}</span></button>`;
+      <span class="rt"><span class="num">${Math.round(x.r)}</span>${x.n?`<br><span class="delta ${d>=0?'pos':'neg'}">${d>=0?'+':''}${d.toFixed(0)}</span>`:''}</span></button>`;
   };
-  let out=seg+picker+ranked.map(row).join('');
+  let out=seg+ranked.map(row).join('');
   if(!ranked.length) out+=`<p class="mute">No ${CATNAME[c]} games yet.</p>`;
   if(unr.length&&c!=='overall') out+=`<h3 class="mute" style="font-size:15px">No ${CATNAME[c]} games</h3>`+unr.map(x=>row(x,null)).join('');
   else if(unr.length) out+=`<h3 class="mute" style="font-size:15px">Haven't played yet</h3>`+unr.map(x=>row(x,null)).join('');
@@ -713,7 +685,6 @@ function vPlayer(){
     ${n?chart(P.H[id][c],S.settings.start):`<p class="mute">No ${CATNAME[c]} games yet.</p>`}
     ${ratingNote}
     ${ins.length?`<h3>What the games say</h3>`+ins.map(t=>`<div class="insight">${t}</div>`).join(''):''}
-    ${(()=>{const rows=practiceRows(id,c);return rows.length?`<h3>Practice by practice</h3><table><tr><th>Date</th><th class="r">Games</th><th class="r">W-L</th><th class="r">Change</th><th class="r">Rating</th></tr>${rows.map(r=>`<tr><td>${dayLabel(r.day)}</td><td class="r">${r.g}</td><td class="r">${r.w}-${r.l}${r.t?'-'+r.t:''}</td><td class="r ${r.d>=0?'pos':'neg'}">${chg(r.d)}</td><td class="r">${Math.round(r.end)}</td></tr>`).join('')}</table>`:'';})()}
     ${table(st.mates[c],'With teammates')}
     ${table(st.opps[c],'Against opponents')}
     <h3>Edit player</h3>
